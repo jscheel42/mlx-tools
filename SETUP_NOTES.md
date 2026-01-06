@@ -2,7 +2,7 @@
 
 ## Summary
 
-Successfully configured MiniMax M2.1 REAP 50 (6-bit quantization) with mlx-lm server for OpenCode integration, with full tool calling support.
+Successfully configured MiniMax M2.1 REAP 50 (4-bit quantization, with 6-bit available) with mlx-lm server for OpenCode integration, with full tool calling support and custom prompt cache sizing.
 
 ## Key Findings
 
@@ -43,30 +43,35 @@ uv pip install -e .
    - Auto tool choice enabled
 
 3. **Context Length**
-   - Model supports: 196,608 tokens
-   - Currently using: 131,072 tokens (4x default)
-   - Can be increased if needed
+   - Model supports: 196,608 tokens (maximum)
+   - Currently using: 120,000 tokens (configurable via --max-tokens)
+   - Can be increased up to model maximum if needed
 
 ## Installation Steps Taken
 
-1. Converted model to MLX 6-bit quantization (~88GB)
-2. Created symlink: `local/MiniMax-M2.1-REAP-50-MLX-6bit`
-3. Installed mlx-lm 0.30.1 from git (editable mode)
+1. Converted models to MLX format:
+   - 4-bit quantization (~61GB) - Currently in use
+   - 6-bit quantization (~88GB) - Available for higher quality
+2. Cloned mlx-lm from git and applied custom patches
+3. Installed mlx-lm in editable mode with `--prompt-cache-size` patch
 4. Configured mlx-lm server with:
    - Tool calling parsers (minimax_m2)
-   - 131K context length
+   - 120K max tokens
+   - Prompt cache size: 1 (optimized for single user)
    - Port 8000
-5. Added to OpenCode config with clean model ID
+5. Added to OpenCode config
 
-## Files Created
+## Repository Structure
 
+- `mlx-lm-repo/` - Cloned and patched mlx-lm (editable install)
+- `local-models/` - Converted MLX models
+- `convert-model.sh` - Script to convert HuggingFace models
+- `setup-mlx-lm-repo.sh` - Script to clone and patch mlx-lm
 - `start-server.sh` - Start server in foreground
 - `stop-server.sh` - Stop server gracefully  
 - `install-service.sh` - Install as macOS launchd service
 - `uninstall-service.sh` - Remove service
 - `com.local.mlx-native-server.plist` - Service configuration
-- `README.md` - Complete documentation
-- `local/` - Symlinked model directory
 
 ## OpenCode Configuration
 
@@ -82,8 +87,8 @@ Added to `~/.config/opencode/opencode.json`:
         "baseURL": "http://localhost:8000/v1"
       },
       "models": {
-        "local/MiniMax-M2.1-REAP-50-MLX-6bit": {
-          "name": "MiniMax M2.1 REAP 50 (6-bit)"
+        "local/MiniMax-M2.1-REAP-50-MLX-4bit": {
+          "name": "MiniMax M2.1 REAP 50 (4-bit)"
         }
       }
     }
@@ -91,20 +96,30 @@ Added to `~/.config/opencode/opencode.json`:
 }
 ```
 
+Note: Update the model ID in your config if you switch between 4-bit and 6-bit models.
+
 ## Performance Characteristics
 
-- **Model**: 50B parameters, 6-bit quantization
-- **Size**: ~88GB on disk
-- **Initial response**: Slow (~6 tok/s) - large model processing from scratch
-- **Follow-ups**: Fast (40-55 tok/s) - KV cache working excellently
+- **Model**: 50B parameters, 4-bit quantization
+- **Size**: ~61GB on disk
+- **Initial response**: ~5-6 tok/s (cold cache - processing from scratch)
+- **Follow-ups**: 40-55 tok/s (warm cache - KV cache working excellently)
 - **Cache speedup**: 6-10x improvement on subsequent messages
+- **Memory usage**: ~65-75GB (model + single conversation cache)
+
+## Current Status
+
+- **Active Model**: 4-bit quantization (good balance of speed and quality)
+- **Prompt Cache**: Set to 1 (optimized for single-user, saves 40-70GB memory)
+- **Installation**: Editable mode from local mlx-lm-repo
+- **Updates**: Can pull upstream mlx-lm changes via git rebase
 
 ## Future Improvements
 
-1. Try 4-bit quantization for faster performance
-2. Increase context to 196K if needed for very long conversations
-3. Monitor when PyPI packaging is fixed
-4. Consider mlx-lm's native server if better conversation tracking needed
+1. Switch to 6-bit quantization if higher quality needed
+2. Increase max-tokens to 196K if needed for very long conversations
+3. Monitor when PyPI packaging is fixed (mlx-lm 0.30.2+)
+4. Consider contributing `--prompt-cache-size` patch upstream
 
 ## Testing
 

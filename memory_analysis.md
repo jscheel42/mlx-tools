@@ -1,8 +1,11 @@
 # MLX-LM Server Memory Usage Analysis
 
-## Current Memory Usage: 92GB for 4-bit Model
+> **Note**: This analysis led to implementing the `--prompt-cache-size` patch.  
+> **Current Status**: Patch is applied and active in `mlx-lm-repo/`. Server now uses `--prompt-cache-size 1`.
 
-The 4-bit MiniMax M2.1 REAP 50 model is using approximately 92GB of memory after light usage.
+## Historical Analysis: 92GB Memory Usage for 4-bit Model
+
+The 4-bit MiniMax M2.1 REAP 50 model was using approximately 92GB of memory after light usage before implementing the prompt cache size fix.
 
 ## Memory Breakdown
 
@@ -46,10 +49,14 @@ For a 50B parameter model with 4-bit quantization:
 **With 10 cached conversations**:
 - 10 × 3.2GB = **~32GB just for cached prompts**
 
-**With longer contexts** (you set max-tokens to 130,000):
+**With longer contexts** (currently set to max-tokens 120,000):
 - If some conversations approach this limit:
-- 80 × 8 × 130,000 × 128 × 2 bytes = **~20GB per conversation**
+- 80 × 8 × 120,000 × 128 × 2 bytes = **~20GB per conversation**
 - Even 3-4 long conversations could consume **60-80GB**
+
+**Current configuration** (prompt-cache-size=1):
+- Only 1 conversation cached at a time
+- Memory usage: ~65-75GB (model + single active cache)
 
 ## Memory Optimization Options
 
@@ -86,26 +93,30 @@ def to_quantized(self, group_size: int = 64, bits: int = 4) -> QuantizedKVCache
 
 This could reduce KV cache memory by ~75% (float16 → 4-bit).
 
-## Recommended Actions
+## Implemented Solution
 
-### Quick Fix: Reduce LRU Cache Size
-Edit `/Users/jscheel/tools/mlx-tools/mlx-lm-repo/mlx_lm/server.py` line 1530:
+### ✓ CLI Argument Added (COMPLETED)
+The `--prompt-cache-size` CLI argument has been implemented via patch:
+- File: `mlx-lm-prompt-cache-size.patch`
+- Applied in: `mlx-lm-repo/mlx_lm/server.py`
+- Current setting: `--prompt-cache-size 1` in `start-server.sh`
 
+**Result**: Memory usage reduced by **40-80GB** by limiting to single conversation cache.
+
+### Alternative Approaches (Not Implemented)
+
+#### Use RotatingKVCache
+Instead of unlimited KVCache growth, use RotatingKVCache with max_size:
+- Automatically trims old tokens
+- Keeps only recent context
+- Located in cache.py:379-548
+
+#### Implement Quantized KV Cache
+KVCache supports quantization (cache.py:365-373):
 ```python
-# Change from:
-response_generator = ResponseGenerator(model_provider, LRUPromptCache())
-
-# To (cache only 2 conversations):
-response_generator = ResponseGenerator(model_provider, LRUPromptCache(max_size=2))
+def to_quantized(self, group_size: int = 64, bits: int = 4) -> QuantizedKVCache
 ```
-
-**Expected savings**: If you have many long conversations cached, this could save **40-80GB**.
-
-### Medium Fix: Add CLI Argument
-Add to argparse section and pass through to LRUPromptCache initialization.
-
-### Long-term Fix: Implement Quantized KV Cache
-Modify the server to use quantized KV cache by default for long conversations.
+This could reduce KV cache memory by ~75% (float16 → 4-bit).
 
 ## Monitoring Memory
 

@@ -24,7 +24,7 @@ Added `--prompt-cache-size 1` to server startup command.
 
 ### Before (default max_size=10):
 - Stores up to 10 complete conversation KV caches
-- With 130k token limit: **10-20GB per conversation**
+- With 120k token limit: **10-20GB per conversation**
 - **Total cache memory**: 60-80GB for long conversations
 
 ### After (max_size=1):
@@ -35,18 +35,21 @@ Added `--prompt-cache-size 1` to server startup command.
 
 ## Usage
 
-### Start with single conversation cache (optimized for OpenCode):
+### Start with single conversation cache (default in start-server.sh):
 ```bash
 ./start-server.sh
 ```
 
+The `start-server.sh` script already includes `--prompt-cache-size 1`.
+
 ### Start with custom cache size:
 ```bash
+source .venv/bin/activate
 python -m mlx_lm server \
-    --model ./local/MiniMax-M2.1-REAP-50-MLX-4bit \
+    --model ./local-models/MiniMax-M2.1-REAP-50-MLX-4bit \
     --prompt-cache-size 5 \
     --port 8000 \
-    ...
+    --trust-remote-code
 ```
 
 ### Start with no caching (minimum memory):

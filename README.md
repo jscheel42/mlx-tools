@@ -1,6 +1,6 @@
 # MLX OpenAI Server - MiniMax M2.1 REAP 50
 
-OpenAI-compatible server for running MiniMax M2.1 REAP 50 (6-bit quantization) locally with MLX on Apple Silicon.
+OpenAI-compatible server for running MiniMax M2.1 REAP 50 (4-bit quantization) locally with MLX on Apple Silicon.
 
 ## First Time Setup
 
@@ -35,11 +35,12 @@ This runs the server in the foreground and displays logs in the terminal. Press 
 
 ## Configuration
 
-- **Model**: MiniMax M2.1 REAP 50 (6-bit quantization)
-- **Context Length**: 131,072 tokens
+- **Model**: MiniMax M2.1 REAP 50 (4-bit quantization, ~61GB)
+- **Max Tokens**: 120,000 tokens
+- **Prompt Cache**: Size 1 (optimized for single user)
 - **Port**: 8000
 - **Base URL**: `http://localhost:8000/v1`
-- **Model ID**: `local/MiniMax-M2.1-REAP-50-MLX-6bit`
+- **Model ID**: `local/MiniMax-M2.1-REAP-50-MLX-4bit`
 - **Tool Calling**: Enabled (minimax_m2 parser)
 
 ## macOS Service (launchd)
@@ -107,8 +108,8 @@ Add to `~/.config/opencode/opencode.json`:
         "baseURL": "http://localhost:8000/v1"
       },
       "models": {
-        "local/MiniMax-M2.1-REAP-50-MLX-6bit": {
-          "name": "MiniMax M2.1 REAP 50 (6-bit)"
+        "local/MiniMax-M2.1-REAP-50-MLX-4bit": {
+          "name": "MiniMax M2.1 REAP 50 (4-bit)"
         }
       }
     }
@@ -129,7 +130,7 @@ Expected response:
 {
   "object": "list",
   "data": [{
-    "id": "local/MiniMax-M2.1-REAP-50-MLX-6bit",
+    "id": "local/MiniMax-M2.1-REAP-50-MLX-4bit",
     "object": "model",
     "created": 1234567890,
     "owned_by": "local"
@@ -175,27 +176,37 @@ lsof -ti:8000 | xargs kill -9
 
 ### Out of memory
 
-Reduce context length in `start-server.sh`:
+Reduce max tokens in `start-server.sh`:
 ```bash
---context-length 65536  # or 32768
+--max-tokens 65536  # or lower
 ```
 
-Or use the 4-bit quantized model instead.
+The 4-bit model is already in use. If still experiencing issues, increase prompt-cache-size reduces memory usage (already set to 1).
 
 ## Model Details
 
+### Active Model
 - **Original**: MiniMax-M2.1-REAP-50
-- **Quantization**: 6-bit
-- **Size**: ~88GB
-- **Max Context**: 196,608 tokens
-- **Location**: `/Users/jscheel/tools/mlx-tools/local-models/MiniMax-M2.1-REAP-50-MLX-6bit`
+- **Quantization**: 4-bit
+- **Size**: ~61GB
+- **Max Context**: 196,608 tokens (model capability)
+- **Current Setting**: 120,000 tokens (configurable in start-server.sh)
+- **Location**: `/Users/jscheel/tools/mlx-tools/local-models/MiniMax-M2.1-REAP-50-MLX-4bit`
+
+### Available Models
+The `local-models/` directory may also contain:
+- `MiniMax-M2.1-REAP-50-MLX-6bit` (~88GB) - Higher quality, slower
+- Other converted models
+
+To switch models, edit `start-server.sh` and change the `--model` path.
 
 ## Dependencies
 
 - Python 3.12+
-- mlx-lm 0.30.2 (from git, installed in editable mode)
+- mlx-lm 0.30.1+ (from git, installed in editable mode with custom patches)
   - Installed from: `/Users/jscheel/tools/mlx-tools/mlx-lm-repo`
-- Apple Silicon Mac
+  - Custom patches: `--prompt-cache-size` argument
+- Apple Silicon Mac (M1/M2/M3 with 64GB+ unified memory recommended)
 
 ## Files
 
