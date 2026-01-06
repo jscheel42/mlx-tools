@@ -2,6 +2,21 @@
 
 OpenAI-compatible server for running MiniMax M2.1 REAP 50 (6-bit quantization) locally with MLX on Apple Silicon.
 
+## First Time Setup
+
+If you don't have `mlx-lm-repo` set up yet:
+
+```bash
+# 1. Clone and patch mlx-lm repository
+./setup-mlx-lm-repo.sh
+
+# 2. Install in server environment
+source .venv/bin/activate
+cd mlx-lm-repo && uv pip install -e . && cd ..
+```
+
+See [MLX_LM_MANAGEMENT.md](MLX_LM_MANAGEMENT.md) for details on updating mlx-lm while preserving patches.
+
 ## Quick Start
 
 ### Manual Start (Foreground)
@@ -184,8 +199,25 @@ Or use the 4-bit quantized model instead.
 
 ## Files
 
+### Server Management
 - `start-server.sh` - Start the server in foreground
 - `stop-server.sh` - Stop the server gracefully
+- `install-service.sh` - Install as macOS launchd service
+- `uninstall-service.sh` - Uninstall the service
 - `com.local.mlx-native-server.plist` - launchd service configuration
-- `local-models/` - Model directory
+
+### Model Management
+- `convert-model.sh` - Convert HuggingFace models to MLX format
+- `setup-mlx-lm-repo.sh` - Clone and patch mlx-lm repository
+- `local-models/` - Model directory (git ignored)
+- `mlx-lm-repo/` - Modified mlx-lm repository (git ignored)
+
+### Documentation
+- `MLX_LM_MANAGEMENT.md` - Guide for managing mlx-lm updates with patches
+- `MODEL_CONVERSION.md` - Model conversion documentation
+- `CACHE_CONFIGURATION.md` - Prompt cache configuration details
+- `SETUP_NOTES.md` - Initial setup notes
+- `memory_analysis.md` - Memory usage analysis
+
+### Other
 - `logs/` - Log files directory
