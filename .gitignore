@@ -1,0 +1,52 @@
+# Model files (large binary files)
+local-models/
+*.safetensors
+*.bin
+*.gguf
+
+# MLX-LM repository (cloned and modified separately)
+mlx-lm-repo/
+
+# Model conversion temporary directory
+.mlx-conversion-temp/
+
+# Python virtual environments
+.venv/
+.venv-mlx/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Ruff cache
+.ruff_cache/
+
+# Logs
+logs/*.log
+*.log
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# MLX/HuggingFace cache
+.cache/
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
