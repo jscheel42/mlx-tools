@@ -14,7 +14,8 @@
 
 set -e
 
-TARGET_MODEL="./local-models/GLM-4.7-REAP-50-MLX-4bit"
+TARGET_MODEL="./local-models/MiniMax-M2.1-REAP-50-MLX-4bit"
+# TARGET_MODEL="./local-models/GLM-4.7-REAP-50-MLX-4bit"
 
 # Change to script directory
 cd "$(dirname "$0")"
