@@ -64,13 +64,16 @@ cat > ~/Library/LaunchAgents/com.local.mlx-native-server.plist <<EOF
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
     
-    <!-- Run at load (start automatically) -->
+    <!-- Run at load (start automatically on boot) -->
     <key>RunAtLoad</key>
     <true/>
     
-    <!-- Keep the service alive (restart if it crashes) -->
+    <!-- Keep alive only if crashed (not on manual stop) -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
     
     <!-- Standard output log -->
     <key>StandardOutPath</key>
@@ -123,8 +126,8 @@ if launchctl list | grep -q com.local.mlx-native-server; then
     echo "  - top_k: 40"
     echo ""
     echo "Commands:"
-    echo "  Start:   launchctl start com.local.mlx-native-server"
-    echo "  Stop:    launchctl stop com.local.mlx-native-server"
+    echo "  Start:   ./start-server.sh (or launchctl start com.local.mlx-native-server)"
+    echo "  Stop:    ./stop-server.sh (or launchctl stop com.local.mlx-native-server)"
     echo "  Status:  launchctl list | grep mlx-native-server"
     echo "  Logs:    tail -f logs/stdout.log"
     echo ""

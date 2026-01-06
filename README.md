@@ -43,40 +43,52 @@ This runs the server in the foreground and displays logs in the terminal. Press 
 - **Model ID**: `local/MiniMax-M2.1-REAP-50-MLX-4bit`
 - **Tool Calling**: Enabled (minimax_m2 parser)
 
-## macOS Service (launchd)
+## Script Management
 
-To run the server automatically on system startup:
+There are two pairs of scripts for managing the server:
 
-### Install Service
+### 1. Start/Stop Server (start-server.sh / stop-server.sh)
+Use these to control the running server process:
 
 ```bash
-./install-service.sh
+# Start server (foreground or via launchd)
+./start-server.sh          # or: launchctl start com.local.mlx-native-server
+
+# Stop server (kills process gracefully)
+./stop-server.sh           # or: launchctl stop com.local.mlx-native-server
 ```
 
-This will:
-- Create the logs directory if needed
-- Copy the service configuration to ~/Library/LaunchAgents/
-- Load and start the service
-- Configure it to auto-start on boot
+These scripts control the **running instance** of the server. If the service is installed, stopping will keep it stopped until you start it again.
 
-### Uninstall Service
+### 2. Install/Uninstall Service (install-service.sh / uninstall-service.sh)
+Use these to manage the **launchd service configuration**:
 
 ```bash
+# Install service (enables auto-start on boot)
+./install-service.sh
+
+# Uninstall service (removes auto-start configuration)
 ./uninstall-service.sh
 ```
 
-This will:
-- Stop the running service
-- Remove it from auto-start
-- Clean up the service configuration
+**Install** registers the service with macOS to auto-start on boot.  
+**Uninstall** removes the service registration entirely.
 
-### Manage Service (Manual)
+### Service Behavior
+
+When installed as a service:
+- **Auto-starts** on system boot
+- **Auto-restarts** if it crashes (but not on clean stop)
+- Use `./stop-server.sh` to stop it (stays stopped until manually started)
+- Use `./uninstall-service.sh` to remove auto-start behavior
+
+### Manual Service Control
 
 ```bash
 # Start service
 launchctl start com.local.mlx-native-server
 
-# Stop service
+# Stop service  
 launchctl stop com.local.mlx-native-server
 
 # Check service status

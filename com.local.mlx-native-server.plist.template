@@ -16,13 +16,16 @@
     <key>WorkingDirectory</key>
     <string>INSTALL_DIR</string>
     
-    <!-- Run at load (start automatically) -->
+    <!-- Run at load (start automatically on boot) -->
     <key>RunAtLoad</key>
     <true/>
     
-    <!-- Keep the service alive (restart if it crashes) -->
+    <!-- Keep alive only if crashed (not on manual stop) -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
     
     <!-- Standard output log -->
     <key>StandardOutPath</key>
