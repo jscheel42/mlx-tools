@@ -12,10 +12,13 @@ set -e
 
 # Change to script directory
 cd "$(dirname "$0")"
+INSTALL_DIR="$(pwd)"
 
 echo "=================================================="
 echo "  Installing MLX Native Server Service"
 echo "=================================================="
+echo ""
+echo "Install directory: $INSTALL_DIR"
 echo ""
 
 # Create logs directory if it doesn't exist
@@ -40,9 +43,56 @@ if [ -f ~/Library/LaunchAgents/com.local.mlx-native-server.plist ]; then
     launchctl unload ~/Library/LaunchAgents/com.local.mlx-native-server.plist 2>/dev/null || true
 fi
 
-# Copy plist to LaunchAgents
-echo "Installing service configuration..."
-cp com.local.mlx-native-server.plist ~/Library/LaunchAgents/
+# Generate plist with current installation directory
+echo "Generating service configuration..."
+cat > ~/Library/LaunchAgents/com.local.mlx-native-server.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service identifier -->
+    <key>Label</key>
+    <string>com.local.mlx-native-server</string>
+    
+    <!-- Program to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>$INSTALL_DIR/start-server.sh</string>
+    </array>
+    
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>$INSTALL_DIR</string>
+    
+    <!-- Run at load (start automatically) -->
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <!-- Keep the service alive (restart if it crashes) -->
+    <key>KeepAlive</key>
+    <true/>
+    
+    <!-- Standard output log -->
+    <key>StandardOutPath</key>
+    <string>$INSTALL_DIR/logs/stdout.log</string>
+    
+    <!-- Standard error log -->
+    <key>StandardErrorPath</key>
+    <string>$INSTALL_DIR/logs/stderr.log</string>
+    
+    <!-- Environment variables (if needed) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    
+    <!-- Throttle interval (seconds to wait before restart after crash) -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>
+EOF
 
 # Load the service
 echo "Loading service..."
@@ -64,7 +114,7 @@ if launchctl list | grep -q com.local.mlx-native-server; then
     echo "Service details:"
     echo "  - Server: mlx-lm native (v0.30.1)"
     echo "  - Port: 8000"
-    echo "  - Model: MiniMax M2.1 REAP 50 (6-bit)"
+    echo "  - Model: MiniMax M2.1 REAP 50 (4-bit)"
     echo "  - Tool Calling: Enabled (built-in)"
     echo ""
     echo "Inference Parameters (MiniMax recommended):"

@@ -177,8 +177,8 @@ pip show mlx-lm
 
 Should show:
 ```
-Location: /Users/jscheel/tools/mlx-tools/.venv/lib/python3.12/site-packages
-Editable project location: /Users/jscheel/tools/mlx-tools/mlx-lm-repo
+Location: .venv/lib/python3.12/site-packages
+Editable project location: <your-path>/mlx-tools/mlx-lm-repo
 ```
 
 ## Testing the Patch

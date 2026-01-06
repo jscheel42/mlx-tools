@@ -9,12 +9,12 @@
     <!-- Program to run -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jscheel/tools/mlx-tools/start-server.sh</string>
+        <string>INSTALL_DIR/start-server.sh</string>
     </array>
     
     <!-- Working directory -->
     <key>WorkingDirectory</key>
-    <string>/Users/jscheel/tools/mlx-tools</string>
+    <string>INSTALL_DIR</string>
     
     <!-- Run at load (start automatically) -->
     <key>RunAtLoad</key>
@@ -26,11 +26,11 @@
     
     <!-- Standard output log -->
     <key>StandardOutPath</key>
-    <string>/Users/jscheel/tools/mlx-tools/logs/stdout.log</string>
+    <string>INSTALL_DIR/logs/stdout.log</string>
     
     <!-- Standard error log -->
     <key>StandardErrorPath</key>
-    <string>/Users/jscheel/tools/mlx-tools/logs/stderr.log</string>
+    <string>INSTALL_DIR/logs/stderr.log</string>
     
     <!-- Environment variables (if needed) -->
     <key>EnvironmentVariables</key>
@@ -44,3 +44,11 @@
     <integer>30</integer>
 </dict>
 </plist>
+
+<!-- 
+NOTE: This is a template file. The install-service.sh script will generate
+the actual plist file with correct paths for your installation directory.
+
+Do not manually copy this file to ~/Library/LaunchAgents/
+Instead, run: ./install-service.sh
+-->

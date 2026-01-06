@@ -130,7 +130,7 @@ print(f"Peak memory: {mx.metal.get_peak_memory() / 1024**3:.2f} GB")
 
 ## File Locations
 
-- Server code: `/Users/jscheel/tools/mlx-tools/mlx-lm-repo/mlx_lm/server.py`
-- Cache implementation: `/Users/jscheel/tools/mlx-tools/mlx-lm-repo/mlx_lm/models/cache.py`
+- Server code: `mlx-lm-repo/mlx_lm/server.py`
+- Cache implementation: `mlx-lm-repo/mlx_lm/models/cache.py`
 - LRUPromptCache class: server.py:174-309
 - LRUPromptCache initialization: server.py:1530

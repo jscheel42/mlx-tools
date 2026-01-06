@@ -191,7 +191,7 @@ The 4-bit model is already in use. If still experiencing issues, increase prompt
 - **Size**: ~61GB
 - **Max Context**: 196,608 tokens (model capability)
 - **Current Setting**: 120,000 tokens (configurable in start-server.sh)
-- **Location**: `/Users/jscheel/tools/mlx-tools/local-models/MiniMax-M2.1-REAP-50-MLX-4bit`
+- **Location**: `local-models/MiniMax-M2.1-REAP-50-MLX-4bit/`
 
 ### Available Models
 The `local-models/` directory may also contain:
@@ -204,7 +204,7 @@ To switch models, edit `start-server.sh` and change the `--model` path.
 
 - Python 3.12+
 - mlx-lm 0.30.1+ (from git, installed in editable mode with custom patches)
-  - Installed from: `/Users/jscheel/tools/mlx-tools/mlx-lm-repo`
+  - Installed from: `mlx-lm-repo/`
   - Custom patches: `--prompt-cache-size` argument
 - Apple Silicon Mac (M1/M2/M3 with 64GB+ unified memory recommended)
 
@@ -213,9 +213,9 @@ To switch models, edit `start-server.sh` and change the `--model` path.
 ### Server Management
 - `start-server.sh` - Start the server in foreground
 - `stop-server.sh` - Stop the server gracefully
-- `install-service.sh` - Install as macOS launchd service
+- `install-service.sh` - Install as macOS launchd service (auto-configures paths)
 - `uninstall-service.sh` - Uninstall the service
-- `com.local.mlx-native-server.plist` - launchd service configuration
+- `com.local.mlx-native-server.plist.template` - Service configuration template
 
 ### Model Management
 - `convert-model.sh` - Convert HuggingFace models to MLX format

@@ -7,7 +7,7 @@ Added `--prompt-cache-size` CLI argument to mlx-lm server to control memory usag
 ## Changes Made
 
 ### 1. Modified mlx-lm server.py
-**File**: `/Users/jscheel/tools/mlx-tools/mlx-lm-repo/mlx_lm/server.py`
+**File**: `mlx-lm-repo/mlx_lm/server.py`
 
 **Changes**:
 - Added `prompt_cache_size` parameter to `run()` function (line ~1524)
@@ -16,7 +16,7 @@ Added `--prompt-cache-size` CLI argument to mlx-lm server to control memory usag
 - Pass argument from main() to run() (line ~1664)
 
 ### 2. Updated start-server.sh
-**File**: `/Users/jscheel/tools/mlx-tools/start-server.sh`
+**File**: `start-server.sh`
 
 Added `--prompt-cache-size 1` to server startup command.
 
@@ -85,11 +85,11 @@ The LRUPromptCache stores complete KV cache states for conversations:
 
 The mlx-lm package is installed in **editable mode**:
 ```
-Location: /Users/jscheel/tools/mlx-tools/.venv/lib/python3.12/site-packages
-Editable project location: /Users/jscheel/tools/mlx-tools/mlx-lm-repo
+Location: .venv/lib/python3.12/site-packages
+Editable project location: mlx-lm-repo/
 ```
 
-Changes to `/Users/jscheel/tools/mlx-tools/mlx-lm-repo/mlx_lm/server.py` take effect immediately (no reinstall needed).
+Changes to `mlx-lm-repo/mlx_lm/server.py` take effect immediately (no reinstall needed).
 
 ## Potential Upstream Contribution
 
