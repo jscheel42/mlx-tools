@@ -14,6 +14,8 @@
 
 set -e
 
+TARGET_MODEL="./local-models/GLM-4.7-REAP-50-MLX-4bit"
+
 # Change to script directory
 cd "$(dirname "$0")"
 
@@ -21,26 +23,24 @@ echo "=================================================="
 echo "  Starting MLX Native Server (mlx-lm)"
 echo "=================================================="
 echo ""
-echo "Model: MiniMax M2.1 REAP 50 (4-bit)"
 echo "Server: mlx-lm native (v0.30.1)"
 echo "Port: 8000"
 echo "Tool Calling: Enabled (built-in)"
 echo ""
-echo "Inference Parameters (MiniMax recommended):"
-echo "  - temperature: 1.0"
-echo "  - top_p: 0.95"
-echo "  - top_k: 40"
-echo ""
+echo "MODEL: ${TARGET_MODEL}"
 echo "Press Ctrl+C to stop the server"
 echo "=================================================="
 echo ""
 
-# Activate virtual environment
-source .venv/bin/activate
-
 # Start mlx-lm native server with MiniMax recommended parameters
-exec python -m mlx_lm server \
-    --model ./local-models/MiniMax-M2.1-REAP-50-MLX-4bit \
+# Use UV's Python and include venv site-packages in PYTHONPATH
+PYTHON_BIN="/Users/jscheel/.local/share/uv/python/cpython-3.12-macos-aarch64-none/bin/python3.12"
+export PYTHONPATH="$PWD/mlx-lm-repo:$PWD/.venv/lib/python3.12/site-packages:${PYTHONPATH:-}"
+
+
+exec "$PYTHON_BIN" -m mlx_lm server \
+    --model $TARGET_MODEL \
+    --model-id "mlx-local" \
     --host 0.0.0.0 \
     --port 8000 \
     --trust-remote-code \

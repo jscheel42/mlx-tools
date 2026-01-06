@@ -1,0 +1,181 @@
+diff --git a/mlx_lm/server.py b/mlx_lm/server.py
+index 425cd38..79c62d5 100644
+--- a/mlx_lm/server.py
++++ b/mlx_lm/server.py
+@@ -172,7 +172,6 @@ def process_message_content(messages):
+ 
+ 
+ class LRUPromptCache:
+-
+     @dataclass
+     class CacheEntry:
+         prompt_cache: List[Any]
+@@ -938,14 +937,28 @@ class APIHandler(BaseHTTPRequestHandler):
+ 
+         indent = "\t"  # Backslashes can't be inside of f-strings
+         logging.debug(f"Incoming Request Body: {json.dumps(self.body, indent=indent)}")
+-        assert isinstance(
+-            self.body, dict
+-        ), f"Request should be dict, but got {type(self.body)}"
++        assert isinstance(self.body, dict), (
++            f"Request should be dict, but got {type(self.body)}"
++        )
+ 
+         # Extract request parameters from the body
+         self.stream = self.body.get("stream", False)
+         self.stream_options = self.body.get("stream_options", None)
+-        self.requested_model = self.body.get("model", "default_model")
++
++        # Map custom model ID back to actual model path
++        requested_model = self.body.get("model", "default_model")
++        custom_model_id = getattr(self.response_generator.cli_args, "model_id", None)
++        if custom_model_id and requested_model == custom_model_id:
++            # Client requested the custom model ID, use the actual model path for loading
++            self.requested_model = (
++                self.response_generator.cli_args.model or "default_model"
++            )
++            # But keep the custom ID for the response
++            self.response_model_id = custom_model_id
++        else:
++            self.requested_model = requested_model
++            self.response_model_id = requested_model
++
+         self.requested_draft_model = self.body.get("draft_model", "default_model")
+         self.num_draft_tokens = self.body.get(
+             "num_draft_tokens", self.response_generator.cli_args.num_draft_tokens
+@@ -1088,10 +1101,10 @@ class APIHandler(BaseHTTPRequestHandler):
+ 
+         # Static response
+         response = {
+-            "id": self.request_id,
+-            "system_fingerprint": self.system_fingerprint,
+-            "object": self.object_type,
+-            "model": self.requested_model,
++            "id": "chatcmpl-" + str(uuid.uuid4()),
++            "system_fingerprint": get_system_fingerprint(),
++            "object": "chat.completion",
++            "model": self.response_model_id,
+             "created": self.created,
+             "choices": [
+                 {
+@@ -1385,7 +1398,7 @@ class APIHandler(BaseHTTPRequestHandler):
+             "id": self.request_id,
+             "system_fingerprint": self.system_fingerprint,
+             "object": "chat.completion",
+-            "model": self.requested_model,
++            "model": self.response_model_id,
+             "created": self.created,
+             "choices": [],
+             "usage": {
+@@ -1484,33 +1497,47 @@ class APIHandler(BaseHTTPRequestHandler):
+             file_names = {f.file_path.name for f in repo.refs["main"].files}
+             return all(f in file_names for f in files)
+ 
+-        # Scan the cache directory for downloaded mlx models
+-        hf_cache_info = scan_cache_dir()
+-        downloaded_models = [
+-            repo for repo in hf_cache_info.repos if probably_mlx_lm(repo)
+-        ]
+-
+-        # Create a list of available models
+-        models = [
+-            {
+-                "id": repo.repo_id,
+-                "object": "model",
+-                "created": self.created,
+-            }
+-            for repo in downloaded_models
+-        ]
+-
+-        if self.response_generator.cli_args.model:
+-            model_path = Path(self.response_generator.cli_args.model)
+-            if model_path.exists():
+-                model_id = str(model_path.resolve())
+-                models.append(
+-                    {
+-                        "id": model_id,
+-                        "object": "model",
+-                        "created": self.created,
+-                    }
+-                )
++        # If model-id is specified, only list the specified model (single-model mode)
++        # Otherwise, scan cache for all available models (multi-model mode)
++        custom_model_id = getattr(self.response_generator.cli_args, "model_id", None)
++
++        if custom_model_id and self.response_generator.cli_args.model:
++            # Single-model mode: only list the specified model with custom ID
++            models = [
++                {
++                    "id": custom_model_id,
++                    "object": "model",
++                    "created": self.created,
++                }
++            ]
++        else:
++            # Multi-model mode: scan cache and list all available models
++            hf_cache_info = scan_cache_dir()
++            downloaded_models = [
++                repo for repo in hf_cache_info.repos if probably_mlx_lm(repo)
++            ]
++
++            models = [
++                {
++                    "id": repo.repo_id,
++                    "object": "model",
++                    "created": self.created,
++                }
++                for repo in downloaded_models
++            ]
++
++            # Add the specified model if provided
++            if self.response_generator.cli_args.model:
++                model_path = Path(self.response_generator.cli_args.model)
++                if model_path.exists():
++                    model_id = str(model_path.resolve())
++                    models.append(
++                        {
++                            "id": model_id,
++                            "object": "model",
++                            "created": self.created,
++                        }
++                    )
+ 
+         response = {"object": "list", "data": models}
+ 
+@@ -1527,7 +1554,10 @@ def run(
+     handler_class=APIHandler,
+ ):
+     server_address = (host, port)
+-    response_generator = ResponseGenerator(model_provider, LRUPromptCache())
++    cache_size = getattr(model_provider.cli_args, "prompt_cache_size", 10)
++    response_generator = ResponseGenerator(
++        model_provider, LRUPromptCache(max_size=cache_size)
++    )
+     infos = socket.getaddrinfo(
+         *server_address, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+     )
+@@ -1556,6 +1586,11 @@ def main():
+         type=str,
+         help="The path to the MLX model weights, tokenizer, and config",
+     )
++    parser.add_argument(
++        "--model-id",
++        type=str,
++        help="Override the model ID returned by the API (default: full model path)",
++    )
+     parser.add_argument(
+         "--adapter-path",
+         type=str,
+@@ -1645,6 +1680,12 @@ def main():
+         help="""A JSON formatted string of arguments for the tokenizer's apply_chat_template, e.g. '{"enable_thinking":false}'""",
+         default="{}",
+     )
++    parser.add_argument(
++        "--prompt-cache-size",
++        type=int,
++        default=10,
++        help="Maximum size of the LRU prompt cache (default: 10)",
++    )
+     args = parser.parse_args()
+     if mx.metal.is_available():
+         wired_limit = mx.metal.device_info()["max_recommended_working_set_size"]

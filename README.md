@@ -40,7 +40,7 @@ This runs the server in the foreground and displays logs in the terminal. Press 
 - **Prompt Cache**: Size 1 (optimized for single user)
 - **Port**: 8000
 - **Base URL**: `http://localhost:8000/v1`
-- **Model ID**: `local/MiniMax-M2.1-REAP-50-MLX-4bit`
+- **Model ID**: `mlx-local` (consistent across all models)
 - **Tool Calling**: Enabled (minimax_m2 parser)
 
 ## Script Management
@@ -113,21 +113,23 @@ Add to `~/.config/opencode/opencode.json`:
 ```json
 {
   "provider": {
-    "mlx-minimax": {
+    "mlx-local": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "MLX MiniMax M2.1 (local)",
+      "name": "MLX Local Server",
       "options": {
         "baseURL": "http://localhost:8000/v1"
       },
       "models": {
-        "local/MiniMax-M2.1-REAP-50-MLX-4bit": {
-          "name": "MiniMax M2.1 REAP 50 (4-bit)"
+        "mlx-local": {
+          "name": "MLX Local Model"
         }
       }
     }
   }
 }
 ```
+
+The model ID `mlx-local` remains constant regardless of which model you load, making it easy to swap models without reconfiguring OpenCode.
 
 ## Testing
 
@@ -142,10 +144,9 @@ Expected response:
 {
   "object": "list",
   "data": [{
-    "id": "local/MiniMax-M2.1-REAP-50-MLX-4bit",
+    "id": "mlx-local",
     "object": "model",
-    "created": 1234567890,
-    "owned_by": "local"
+    "created": 1234567890
   }]
 }
 ```
