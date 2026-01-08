@@ -49,4 +49,7 @@ exec "$PYTHON_BIN" -m mlx_lm server \
     --top-p 0.95 \
     --top-k 40 \
     --max-tokens 120000 \
-    --prompt-cache-size 1
+    --prompt-cache-size 1 \
+    --kv-bits 4 \
+    --kv-group-size 64 \
+    --quantized-kv-start 0

@@ -38,6 +38,7 @@ This runs the server in the foreground and displays logs in the terminal. Press 
 - **Model**: MiniMax M2.1 REAP 50 (4-bit quantization, ~61GB)
 - **Max Tokens**: 120,000 tokens
 - **Prompt Cache**: Size 1 (optimized for single user)
+- **KV Cache Quantization**: 4-bit (reduces memory usage for long contexts)
 - **Port**: 8000
 - **Base URL**: `http://localhost:8000/v1`
 - **Model ID**: `mlx-local` (consistent across all models)
@@ -187,14 +188,28 @@ Stop any running instances:
 lsof -ti:8000 | xargs kill -9
 ```
 
-### Out of memory
+### Out of memory or memory pressure with long contexts
 
-Reduce max tokens in `start-server.sh`:
+The server uses KV cache quantization (4-bit) to reduce memory usage for long conversations. This provides significant memory savings with minimal quality loss.
+
+To adjust memory usage, edit `start-server.sh`:
+
+**Reduce max tokens:**
 ```bash
 --max-tokens 65536  # or lower
 ```
 
-The 4-bit model is already in use. If still experiencing issues, increase prompt-cache-size reduces memory usage (already set to 1).
+**Adjust KV cache quantization:**
+```bash
+--kv-bits 4          # Use 4-bit (default, ~75% memory reduction)
+--kv-bits 8          # Use 8-bit (~50% memory reduction, higher quality)
+--kv-bits            # Remove to disable quantization (full precision)
+```
+
+**Memory usage comparison (approximate):**
+- No quantization: ~100GB+ for 120k context
+- 8-bit KV cache: ~50-60GB for 120k context  
+- 4-bit KV cache: ~25-30GB for 120k context (recommended)
 
 ## Model Details
 
@@ -240,6 +255,7 @@ To switch models, edit `start-server.sh` and change the `--model` path.
 - `MLX_LM_MANAGEMENT.md` - Guide for managing mlx-lm updates with patches
 - `MODEL_CONVERSION.md` - Model conversion documentation
 - `CACHE_CONFIGURATION.md` - Prompt cache configuration details
+- `KV_CACHE_QUANTIZATION.md` - KV cache quantization for memory optimization
 - `SETUP_NOTES.md` - Initial setup notes
 - `memory_analysis.md` - Memory usage analysis
 

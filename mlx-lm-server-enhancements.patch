@@ -1,5 +1,5 @@
 diff --git a/mlx_lm/server.py b/mlx_lm/server.py
-index 425cd38..79c62d5 100644
+index 425cd38..f376045 100644
 --- a/mlx_lm/server.py
 +++ b/mlx_lm/server.py
 @@ -172,7 +172,6 @@ def process_message_content(messages):
@@ -10,7 +10,36 @@ index 425cd38..79c62d5 100644
      @dataclass
      class CacheEntry:
          prompt_cache: List[Any]
-@@ -938,14 +937,28 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -792,6 +791,20 @@ class ResponseGenerator:
+                     cache += make_prompt_cache(self.model_provider.draft_model)
+ 
+             # Process the prompt and generate tokens
++            # Add KV cache quantization parameters if specified
++            kv_kwargs = {}
++            if (
++                hasattr(self.response_generator.cli_args, "kv_bits")
++                and self.response_generator.cli_args.kv_bits
++            ):
++                kv_kwargs["kv_bits"] = self.response_generator.cli_args.kv_bits
++                kv_kwargs["kv_group_size"] = (
++                    self.response_generator.cli_args.kv_group_size
++                )
++                kv_kwargs["quantized_kv_start"] = (
++                    self.response_generator.cli_args.quantized_kv_start
++                )
++
+             for gen in stream_generate(
+                 model=model,
+                 tokenizer=tokenizer,
+@@ -803,6 +816,7 @@ class ResponseGenerator:
+                 draft_model=draft_model,
+                 num_draft_tokens=args.num_draft_tokens,
+                 prompt_progress_callback=progress,
++                **kv_kwargs,
+             ):
+                 top_tokens = None
+                 if args.logprobs > 0:
+@@ -938,14 +952,28 @@ class APIHandler(BaseHTTPRequestHandler):
  
          indent = "\t"  # Backslashes can't be inside of f-strings
          logging.debug(f"Incoming Request Body: {json.dumps(self.body, indent=indent)}")
@@ -43,7 +72,7 @@ index 425cd38..79c62d5 100644
          self.requested_draft_model = self.body.get("draft_model", "default_model")
          self.num_draft_tokens = self.body.get(
              "num_draft_tokens", self.response_generator.cli_args.num_draft_tokens
-@@ -1088,10 +1101,10 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1088,10 +1116,10 @@ class APIHandler(BaseHTTPRequestHandler):
  
          # Static response
          response = {
@@ -58,7 +87,7 @@ index 425cd38..79c62d5 100644
              "created": self.created,
              "choices": [
                  {
-@@ -1385,7 +1398,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1385,7 +1413,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": "chat.completion",
@@ -67,7 +96,7 @@ index 425cd38..79c62d5 100644
              "created": self.created,
              "choices": [],
              "usage": {
-@@ -1484,33 +1497,47 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1484,33 +1512,47 @@ class APIHandler(BaseHTTPRequestHandler):
              file_names = {f.file_path.name for f in repo.refs["main"].files}
              return all(f in file_names for f in files)
  
@@ -142,7 +171,7 @@ index 425cd38..79c62d5 100644
  
          response = {"object": "list", "data": models}
  
-@@ -1527,7 +1554,10 @@ def run(
+@@ -1527,7 +1569,10 @@ def run(
      handler_class=APIHandler,
  ):
      server_address = (host, port)
@@ -154,7 +183,7 @@ index 425cd38..79c62d5 100644
      infos = socket.getaddrinfo(
          *server_address, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
      )
-@@ -1556,6 +1586,11 @@ def main():
+@@ -1556,6 +1601,11 @@ def main():
          type=str,
          help="The path to the MLX model weights, tokenizer, and config",
      )
@@ -166,7 +195,7 @@ index 425cd38..79c62d5 100644
      parser.add_argument(
          "--adapter-path",
          type=str,
-@@ -1645,6 +1680,12 @@ def main():
+@@ -1645,6 +1695,30 @@ def main():
          help="""A JSON formatted string of arguments for the tokenizer's apply_chat_template, e.g. '{"enable_thinking":false}'""",
          default="{}",
      )
@@ -175,6 +204,24 @@ index 425cd38..79c62d5 100644
 +        type=int,
 +        default=10,
 +        help="Maximum size of the LRU prompt cache (default: 10)",
++    )
++    parser.add_argument(
++        "--kv-bits",
++        type=int,
++        default=None,
++        help="Number of bits for KV cache quantization (4 or 8 recommended, default: no quantization)",
++    )
++    parser.add_argument(
++        "--kv-group-size",
++        type=int,
++        default=64,
++        help="Group size for KV cache quantization (default: 64)",
++    )
++    parser.add_argument(
++        "--quantized-kv-start",
++        type=int,
++        default=0,
++        help="Step to start quantizing KV cache (default: 0, quantize from start)",
 +    )
      args = parser.parse_args()
      if mx.metal.is_available():
