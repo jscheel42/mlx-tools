@@ -17,15 +17,15 @@ index 425cd38..f376045 100644
 +            # Add KV cache quantization parameters if specified
 +            kv_kwargs = {}
 +            if (
-+                hasattr(self.response_generator.cli_args, "kv_bits")
-+                and self.response_generator.cli_args.kv_bits
++                hasattr(self.model_provider.cli_args, "kv_bits")
++                and self.model_provider.cli_args.kv_bits
 +            ):
-+                kv_kwargs["kv_bits"] = self.response_generator.cli_args.kv_bits
++                kv_kwargs["kv_bits"] = self.model_provider.cli_args.kv_bits
 +                kv_kwargs["kv_group_size"] = (
-+                    self.response_generator.cli_args.kv_group_size
++                    self.model_provider.cli_args.kv_group_size
 +                )
 +                kv_kwargs["quantized_kv_start"] = (
-+                    self.response_generator.cli_args.quantized_kv_start
++                    self.model_provider.cli_args.quantized_kv_start
 +                )
 +
              for gen in stream_generate(
