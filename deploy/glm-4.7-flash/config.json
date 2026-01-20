@@ -1,0 +1,23 @@
+{
+  "name": "glm-4.7-flash",
+  "display_name": "GLM-4.7-Flash 8bit",
+  "model_path": "mlx-community/GLM-4.7-Flash-8bit",
+  "parameters": {
+    "temp": 0.7,
+    "top_p": 1.0,
+    "top_k": 40,
+    "max_tokens": 100000
+  },
+  "kv_cache": {
+    "bits": 8,
+    "group_size": 64,
+    "quantized_start": 0
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "model_id": "mlx-local",
+    "trust_remote_code": true,
+    "prompt_cache_size": 1
+  }
+}
