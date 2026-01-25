@@ -1,7 +1,7 @@
 {
   "name": "glm-4.7-flash",
-  "display_name": "GLM-4.7-Flash 8bit",
-  "model_path": "mlx-community/GLM-4.7-Flash-8bit",
+  "display_name": "GLM-4.7-Flash 6bit",
+  "model_path": "./local-models/Huihui-GLM-4.7-Flash-abliterated-6bit",
   "parameters": {
     "temp": 0.7,
     "top_p": 1.0,
@@ -9,7 +9,7 @@
     "max_tokens": 100000
   },
   "kv_cache": {
-    "bits": 8,
+    "bits": 6,
     "group_size": 64,
     "quantized_start": 0
   },
@@ -18,6 +18,6 @@
     "port": 8000,
     "model_id": "mlx-local",
     "trust_remote_code": true,
-    "prompt_cache_size": 1
+    "prompt_cache_size": 2
   }
 }
