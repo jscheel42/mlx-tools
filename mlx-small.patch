@@ -24,10 +24,52 @@ index aecbcb7..308c326 100644
          self.keys = self.keys[batch_indices]
          self.values = self.values[batch_indices]
          self.offset = self.offset[batch_indices]
+diff --git a/mlx_lm/models/glm4_moe_lite.py b/mlx_lm/models/glm4_moe_lite.py
+index 5830251..cc92912 100644
+--- a/mlx_lm/models/glm4_moe_lite.py
++++ b/mlx_lm/models/glm4_moe_lite.py
+@@ -224,10 +224,10 @@ class Glm4MoeLiteAttention(nn.Module):
+ 
+         q_nope = self.embed_q(q_nope)
+         keys = mx.concatenate([kv_latent, k_pe], axis=-1)
++        values = kv_latent
+ 
+         if cache is not None:
+-            keys, _ = cache.update_and_fetch(keys, mx.zeros((B, 1, L, 0)))
+-        values = keys[..., : -self.qk_rope_head_dim]
++            keys, values = cache.update_and_fetch(keys, values)
+ 
+         queries = mx.concatenate([q_nope, q_pe], axis=-1)
+
+diff --git a/mlx_lm/models/base.py b/mlx_lm/models/base.py
+index d7c3efb..35f036e 100644
+--- a/mlx_lm/models/base.py
++++ b/mlx_lm/models/base.py
+@@ -73,3 +73,5 @@ def quantized_scaled_dot_product_attention(
+     B, n_q_heads, L, D = queries.shape
+     n_kv_heads = q_keys[0].shape[-3]
++    el_per_int = 8 * mx.uint32.size // bits
++    v_dim = q_values[0].shape[-1] * el_per_int
+     n_repeats = n_q_heads // n_kv_heads
+@@ -101,5 +103,5 @@ def quantized_scaled_dot_product_attention(
+ 
+     if n_repeats > 1:
+-        out = mx.reshape(out, (B, n_q_heads, L, D))
++        out = mx.reshape(out, (B, n_q_heads, L, v_dim))
+ 
+     return out
 diff --git a/mlx_lm/server.py b/mlx_lm/server.py
-index 9c3a078..dd5c187 100644
+index 9c3a078..41c32d9 100644
 --- a/mlx_lm/server.py
 +++ b/mlx_lm/server.py
+@@ -171,7 +171,6 @@ def process_message_content(messages):
+ 
+ 
+ class LRUPromptCache:
+-
+     @dataclass
+     class CacheEntry:
+         prompt_cache: List[Any]
 @@ -340,8 +340,11 @@ class GenerationArguments:
      stop_words: List[str]
  
@@ -40,8 +82,7 @@ index 9c3a078..dd5c187 100644
 +    quantized_kv_start: int
  
  
-@@ -655,6 +657,8 @@ class ResponseGenerator:
-         if not self.model_provider.is_batchable:
+@@ -657,5 +659,7 @@ class ResponseGenerator:
              return False
          if args.seed is not None:
              return False
@@ -88,9 +129,9 @@ index 9c3a078..dd5c187 100644
          stop_words = stop_words or []
          stop_words = [stop_words] if isinstance(stop_words, str) else stop_words
  
-+        kv_bits = self.response_generator.cli_args.kv_bits
-+        if kv_bits is not None and kv_bits <= 0:
-+            kv_bits = None
++        self.kv_bits = self.response_generator.cli_args.kv_bits
++        if self.kv_bits is not None and self.kv_bits <= 0:
++            self.kv_bits = None
 +
          # Create the completion request
          request = request_factories[self.path]()
@@ -108,7 +149,7 @@ index 9c3a078..dd5c187 100644
              num_draft_tokens=self.num_draft_tokens,
              logprobs=self.logprobs,
              seed=self.seed,
-+            kv_bits=kv_bits,
++            kv_bits=self.kv_bits,
 +            kv_group_size=self.response_generator.cli_args.kv_group_size,
 +            quantized_kv_start=self.response_generator.cli_args.quantized_kv_start,
          )
