@@ -25,7 +25,6 @@ CONFIG_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(
 CONFIG_MODEL_PATH=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('model_path', ''))")
 CONFIG_DISPLAY_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('display_name', c.get('name', 'unknown')))")
 
-SERVER_CONFIG=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(json.dumps(c.get('server', {})))")
 CONFIG_PORT=$(python3 -c "import json; c=json.loads(open('$CONFIG_FILE').read()); print(c.get('server', {}).get('port', 8000))")
 CONFIG_MODEL_ID=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('model_id', 'mlx-local'))")
 
@@ -34,13 +33,13 @@ TOP_P=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get(
 TOP_K=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('parameters', {}).get('top_k', 20))")
 MAX_TOKENS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('parameters', {}).get('max_tokens', 100000))")
 
-KV_BITS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('bits', 0))")
+KV_BITS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('bits', 8))")
 KV_GROUP_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('group_size', 64))")
 KV_QUANTIZED_START=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('quantized_start', 0))")
 
 HOST=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('host', '0.0.0.0'))")
+WIRED_LIMIT_MB=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('wired_limit_mb', 0))")
 TRUST_REMOTE_CODE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print('true' if c.get('server', {}).get('trust_remote_code', True) else 'false')")
-PROMPT_CACHE_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_cache_size', 1))")
 
 SERVICE_NAME="com.local.mlx-$CONFIG_NAME"
 PLIST_PATH="$HOME/Library/LaunchAgents/$SERVICE_NAME.plist"
@@ -95,15 +94,15 @@ exec "$PYTHON_BIN" -m mlx_lm server \\
     --model "$CONFIG_MODEL_PATH" \\
     --model-id "$CONFIG_MODEL_ID" \\
     --host "$HOST" \\
+    --wired-limit-mb $WIRED_LIMIT_MB \\
     --port $CONFIG_PORT \\
     $([ "$TRUST_REMOTE_CODE" = "true" ] && echo "--trust-remote-code") \\
     --temp $TEMP \\
     --top-p $TOP_P \\
     --top-k $TOP_K \\
-    --max-tokens $MAX_TOKENS \\
-    --prompt-cache-size $PROMPT_CACHE_SIZE \\
-    --kv-bits $KV_BITS \\
-    --kv-group-size $KV_GROUP_SIZE \\
+    --max-tokens $MAX_TOKENS \
+    --kv-bits $KV_BITS \
+    --kv-group-size $KV_GROUP_SIZE \
     --quantized-kv-start $KV_QUANTIZED_START
 STARTSCRIPT
 
@@ -181,10 +180,6 @@ if launchctl list | grep -q "$SERVICE_NAME"; then
     echo "  - temperature: $TEMP"
     echo "  - top_p: $TOP_P"
     echo "  - top_k: $TOP_K"
-    echo ""
-    echo "KV Cache:"
-    echo "  - bits: $KV_BITS"
-    echo "  - group_size: $KV_GROUP_SIZE"
     echo ""
     echo "Commands:"
     echo "  Start:   launchctl start $SERVICE_NAME"

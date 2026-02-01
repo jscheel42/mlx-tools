@@ -4,16 +4,36 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MLX_REPO_DIR="${SCRIPT_DIR}/mlx-lm-repo"
-PATCH_FILE="${SCRIPT_DIR}/mlx-lm-server-enhancements.patch"
+PATCH_FILE="${SCRIPT_DIR}/mlx-small.patch"
+APPLY_PATCH=true
+PATCH_PATH=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --apply-patch)
+            APPLY_PATCH=true
+            shift
+            ;;
+        --patch)
+            APPLY_PATCH=true
+            PATCH_PATH="$2"
+            shift 2
+            ;;
+        *)
+            echo "Error: Unknown option: $1"
+            echo "Usage: $0 [--apply-patch] [--patch <path>]"
+            exit 1
+            ;;
+    esac
+done
 
 if [ ! -d "$MLX_REPO_DIR" ]; then
     echo "Error: mlx-lm-repo directory not found at $MLX_REPO_DIR"
     exit 1
 fi
 
-if [ ! -f "$PATCH_FILE" ]; then
-    echo "Error: Patch file not found at $PATCH_FILE"
-    exit 1
+if [ -n "$PATCH_PATH" ]; then
+    PATCH_FILE="$PATCH_PATH"
 fi
 
 echo "Updating mlx-lm-repo to latest upstream version..."
@@ -37,21 +57,29 @@ fi
 echo "Pulling latest changes from origin/main..."
 git pull origin main
 
-echo "Applying local patches..."
-if git apply --check "$PATCH_FILE" 2>/dev/null; then
-    echo "Applying patch file..."
-    git apply "$PATCH_FILE"
-    echo "Patch applied successfully"
-else
-    echo "Warning: Patch could not be applied cleanly"
-    echo "Attempting to apply with 3-way merge..."
-    if git apply --3way "$PATCH_FILE"; then
-        echo "Patch applied with 3-way merge"
-    else
-        echo "Error: Failed to apply patch"
-        echo "You may need to resolve conflicts manually"
+if [ "$APPLY_PATCH" = true ]; then
+    if [ ! -f "$PATCH_FILE" ]; then
+        echo "Error: Patch file not found at $PATCH_FILE"
         exit 1
     fi
+    echo "Applying local patches..."
+    if git apply --check "$PATCH_FILE" 2>/dev/null; then
+        echo "Applying patch file..."
+        git apply "$PATCH_FILE"
+        echo "Patch applied successfully"
+    else
+        echo "Warning: Patch could not be applied cleanly"
+        echo "Attempting to apply with 3-way merge..."
+        if git apply --3way "$PATCH_FILE"; then
+            echo "Patch applied with 3-way merge"
+        else
+            echo "Error: Failed to apply patch"
+            echo "You may need to resolve conflicts manually"
+            exit 1
+        fi
+    fi
+else
+    echo "Skipping patch apply (no --apply-patch flag)"
 fi
 
 echo "Reinstalling mlx-lm in development mode..."
@@ -69,7 +97,7 @@ fi
 
 echo "Running basic tests to verify update..."
 cd "$MLX_REPO_DIR"
-if python -m unittest tests.test_models.TestModelLoad.test_llama -v 2>/dev/null; then
+if python -m unittest tests.test_models.TestModels.test_llama -v 2>/dev/null; then
     echo "Basic test passed"
 else
     echo "Warning: Basic test failed, but update completed"

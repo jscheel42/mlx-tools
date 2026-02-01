@@ -34,11 +34,12 @@ TOP_P=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get(
 TOP_K=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('parameters', {}).get('top_k', 20))")
 MAX_TOKENS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('parameters', {}).get('max_tokens', 100000))")
 
-KV_BITS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('bits', 0))")
+KV_BITS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('bits', 8))")
 KV_GROUP_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('group_size', 64))")
 KV_QUANTIZED_START=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('quantized_start', 0))")
 
 HOST=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('host', '0.0.0.0'))")
+WIRED_LIMIT_MB=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('wired_limit_mb', 0))")
 TRUST_REMOTE_CODE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print('true' if c.get('server', {}).get('trust_remote_code', True) else 'false')")
 PROMPT_CACHE_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_cache_size', 1))")
 
@@ -95,6 +96,7 @@ exec "$PYTHON_BIN" -m mlx_lm server \\
     --model "$CONFIG_MODEL_PATH" \\
     --model-id "$CONFIG_MODEL_ID" \\
     --host "$HOST" \\
+    --wired-limit-mb $WIRED_LIMIT_MB \\
     --port $CONFIG_PORT \\
     $([ "$TRUST_REMOTE_CODE" = "true" ] && echo "--trust-remote-code") \\
     --temp $TEMP \\

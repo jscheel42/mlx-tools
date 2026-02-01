@@ -1,3 +1,5 @@
+# NOTE: Includes a guard against empty batch KV cache filtering to avoid
+# ValueError when all active batch entries finish simultaneously.
 diff --git a/mlx_lm/server.py b/mlx_lm/server.py
 index 425cd38..f376045 100644
 --- a/mlx_lm/server.py
@@ -224,5 +226,48 @@ index 425cd38..f376045 100644
 +        help="Step to start quantizing KV cache (default: 0, quantize from start)",
 +    )
      args = parser.parse_args()
-     if mx.metal.is_available():
-         wired_limit = mx.metal.device_info()["max_recommended_working_set_size"]
+    if mx.metal.is_available():
+        wired_limit = mx.metal.device_info()["max_recommended_working_set_size"]
+
+diff --git a/mlx_lm/models/cache.py b/mlx_lm/models/cache.py
+index 21d3e2c..b1b15db 100644
+--- a/mlx_lm/models/cache.py
++++ b/mlx_lm/models/cache.py
+@@ -907,10 +907,19 @@ class BatchKVCache(_BaseCache):
+     def filter(self, batch_indices):
+         """
+         In-place filter to keep just the given indices in the cache.
+         """
+-        self.keys = self.keys[batch_indices]
+-        self.values = self.values[batch_indices]
+         self.offset = self.offset[batch_indices]
+         self.left_padding = self.left_padding[batch_indices]
++        if self.keys is None or self.values is None:
++            return
++        if self.keys.size == 0 or self.values.size == 0:
++            self.keys = None
++            self.values = None
++            self._idx = 0
++            return
++        self.keys = self.keys[batch_indices]
++        self.values = self.values[batch_indices]
+@@ -1211,10 +1220,20 @@ class BatchRotatingKVCache(_BaseCache):
+     def filter(self, batch_indices):
+         """
+         In-place filter to keep just the given indices in the cache.
+         """
+-        self.keys = self.keys[batch_indices]
+-        self.values = self.values[batch_indices]
+         self.offset = self.offset[batch_indices]
+         self.left_padding = self.left_padding[batch_indices]
++        if self.keys is None or self.values is None:
++            return
++        if self.keys.size == 0 or self.values.size == 0:
++            self.keys = None
++            self.values = None
++            self._idx = 0
++            self._offset = 0
++            self.rotated = False
++            return
++        self.keys = self.keys[batch_indices]
++        self.values = self.values[batch_indices]

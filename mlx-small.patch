@@ -1,0 +1,251 @@
+diff --git a/mlx_lm/models/cache.py b/mlx_lm/models/cache.py
+index aecbcb7..308c326 100644
+--- a/mlx_lm/models/cache.py
++++ b/mlx_lm/models/cache.py
+@@ -914,6 +914,21 @@ class BatchKVCache(_BaseCache):
+         """
+         In-place filter to keep just the given indices in the cache.
+         """
++        if self.keys is None or self.values is None:
++            self.offset = self.offset[batch_indices]
++            self.left_padding = self.left_padding[batch_indices]
++            return
++        if self.keys.size == 0 or self.values.size == 0:
++            keep = int(batch_indices.shape[0])
++            k_shape = list(self.keys.shape)
++            v_shape = list(self.values.shape)
++            k_shape[0] = keep
++            v_shape[0] = keep
++            self.keys = mx.zeros(tuple(k_shape), self.keys.dtype)
++            self.values = mx.zeros(tuple(v_shape), self.values.dtype)
++            self.offset = self.offset[batch_indices]
++            self.left_padding = self.left_padding[batch_indices]
++            return
+         self.keys = self.keys[batch_indices]
+         self.values = self.values[batch_indices]
+         self.offset = self.offset[batch_indices]
+diff --git a/mlx_lm/server.py b/mlx_lm/server.py
+index 9c3a078..dd5c187 100644
+--- a/mlx_lm/server.py
++++ b/mlx_lm/server.py
+@@ -340,8 +340,11 @@ class GenerationArguments:
+     stop_words: List[str]
+ 
+     max_tokens: int
+     num_draft_tokens: int
+     logprobs: int
+     seed: Optional[int]
++    kv_bits: Optional[int]
++    kv_group_size: int
++    quantized_kv_start: int
+ 
+ 
+@@ -655,6 +657,8 @@ class ResponseGenerator:
+         if not self.model_provider.is_batchable:
+             return False
+         if args.seed is not None:
+             return False
++        if args.kv_bits is not None:
++            return False
+ 
+         return True
+@@ -922,6 +926,9 @@ class ResponseGenerator:
+                 draft_model=draft_model,
+                 num_draft_tokens=args.num_draft_tokens,
+                 prompt_progress_callback=progress,
++                kv_bits=args.kv_bits,
++                kv_group_size=args.kv_group_size,
++                quantized_kv_start=args.quantized_kv_start,
+             ):
+                 top_tokens = None
+                 if args.logprobs > 0:
+@@ -1059,14 +1066,21 @@ class APIHandler(BaseHTTPRequestHandler):
+ 
+         indent = "\t"  # Backslashes can't be inside of f-strings
+         logging.debug(f"Incoming Request Body: {json.dumps(self.body, indent=indent)}")
+-        assert isinstance(
+-            self.body, dict
+-        ), f"Request should be dict, but got {type(self.body)}"
++        assert isinstance(self.body, dict), (
++            f"Request should be dict, but got {type(self.body)}"
++        )
+ 
+         # Extract request parameters from the body
+         self.stream = self.body.get("stream", False)
+         self.stream_options = self.body.get("stream_options", None)
+         self.requested_model = self.body.get("model", "default_model")
++        self.response_model_id = self.requested_model
++        model_id = getattr(self.response_generator.cli_args, "model_id", None)
++        if model_id and self.requested_model == model_id:
++            self.requested_model = (
++                self.response_generator.cli_args.model or "default_model"
++            )
++            self.response_model_id = model_id
+         self.requested_draft_model = self.body.get("draft_model", "default_model")
+         self.num_draft_tokens = self.body.get(
+             "num_draft_tokens", self.response_generator.cli_args.num_draft_tokens
+@@ -1097,6 +1111,10 @@ class APIHandler(BaseHTTPRequestHandler):
+         stop_words = stop_words or []
+         stop_words = [stop_words] if isinstance(stop_words, str) else stop_words
+ 
++        kv_bits = self.response_generator.cli_args.kv_bits
++        if kv_bits is not None and kv_bits <= 0:
++            kv_bits = None
++
+         # Create the completion request
+         request = request_factories[self.path]()
+         self.handle_completion(request, stop_words)
+@@ -1212,7 +1230,7 @@ class APIHandler(BaseHTTPRequestHandler):
+             "id": self.request_id,
+             "system_fingerprint": self.system_fingerprint,
+             "object": self.object_type,
+-            "model": self.requested_model,
++            "model": self.response_model_id,
+             "created": self.created,
+             "choices": [
+                 {
+@@ -1295,6 +1313,9 @@ class APIHandler(BaseHTTPRequestHandler):
+             num_draft_tokens=self.num_draft_tokens,
+             logprobs=self.logprobs,
+             seed=self.seed,
++            kv_bits=kv_bits,
++            kv_group_size=self.response_generator.cli_args.kv_group_size,
++            quantized_kv_start=self.response_generator.cli_args.quantized_kv_start,
+         )
+ 
+         # Create keepalive callback to send SSE comments during long prompt processing
+@@ -1513,7 +1534,7 @@ class APIHandler(BaseHTTPRequestHandler):
+             "id": self.request_id,
+             "system_fingerprint": self.system_fingerprint,
+             "object": "chat.completion",
+-            "model": self.requested_model,
++            "model": self.response_model_id,
+             "created": self.created,
+             "choices": [],
+             "usage": {
+@@ -1612,33 +1633,43 @@ class APIHandler(BaseHTTPRequestHandler):
+             file_names = {f.file_path.name for f in repo.refs["main"].files}
+             return all(f in file_names for f in files)
+ 
+-        # Scan the cache directory for downloaded mlx models
+-        hf_cache_info = scan_cache_dir()
+-        downloaded_models = [
+-            repo for repo in hf_cache_info.repos if probably_mlx_lm(repo)
+-        ]
+-
+-        # Create a list of available models
+-        models = [
+-            {
+-                "id": repo.repo_id,
+-                "object": "model",
+-                "created": self.created,
+-            }
+-            for repo in downloaded_models
+-        ]
+-
+-        if self.response_generator.cli_args.model:
+-            model_path = Path(self.response_generator.cli_args.model)
+-            if model_path.exists():
+-                model_id = str(model_path.resolve())
+-                models.append(
+-                    {
+-                        "id": model_id,
+-                        "object": "model",
+-                        "created": self.created,
+-                    }
+-                )
++        model_id = getattr(self.response_generator.cli_args, "model_id", None)
++        if model_id:
++            models = [
++                {
++                    "id": model_id,
++                    "object": "model",
++                    "created": self.created,
++                }
++            ]
++        else:
++            # Scan the cache directory for downloaded mlx models
++            hf_cache_info = scan_cache_dir()
++            downloaded_models = [
++                repo for repo in hf_cache_info.repos if probably_mlx_lm(repo)
++            ]
++
++            # Create a list of available models
++            models = [
++                {
++                    "id": repo.repo_id,
++                    "object": "model",
++                    "created": self.created,
++                }
++                for repo in downloaded_models
++            ]
++
++            if self.response_generator.cli_args.model:
++                model_path = Path(self.response_generator.cli_args.model)
++                if model_path.exists():
++                    model_id = str(model_path.resolve())
++                    models.append(
++                        {
++                            "id": model_id,
++                            "object": "model",
++                            "created": self.created,
++                        }
++                    )
+ 
+         response = {"object": "list", "data": models}
+ 
+@@ -1702,6 +1733,11 @@ def main():
+         type=str,
+         help="The path to the MLX model weights, tokenizer, and config",
+     )
++    parser.add_argument(
++        "--model-id",
++        type=str,
++        help="Override the model ID returned by the API",
++    )
+     parser.add_argument(
+         "--adapter-path",
+         type=str,
+@@ -1785,6 +1821,30 @@ def main():
+         default=512,
+         help="Default maximum number of tokens to generate (default: 512)",
+     )
++    parser.add_argument(
++        "--wired-limit-mb",
++        type=int,
++        default=0,
++        help="Metal wired memory limit in MB (0 uses recommended)",
++    )
++    parser.add_argument(
++        "--kv-bits",
++        type=int,
++        default=8,
++        help="Number of bits for KV cache quantization (default: 8)",
++    )
++    parser.add_argument(
++        "--kv-group-size",
++        type=int,
++        default=64,
++        help="Group size for KV cache quantization (default: 64)",
++    )
++    parser.add_argument(
++        "--quantized-kv-start",
++        type=int,
++        default=0,
++        help="Step to begin KV cache quantization (default: 0)",
++    )
+     parser.add_argument(
+         "--chat-template-args",
+         type=json.loads,
+@@ -1810,7 +1870,10 @@ def main():
+     )
+     args = parser.parse_args()
+     if mx.metal.is_available():
+-        wired_limit = mx.device_info()["max_recommended_working_set_size"]
++        if args.wired_limit_mb > 0:
++            wired_limit = args.wired_limit_mb * 2**20
++        else:
++            wired_limit = mx.device_info()["max_recommended_working_set_size"]
+         mx.set_wired_limit(wired_limit)
+ 
+     logging.basicConfig(

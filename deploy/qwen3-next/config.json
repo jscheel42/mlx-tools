@@ -17,6 +17,7 @@
     "host": "0.0.0.0",
     "port": 8001,
     "model_id": "qwen3-next",
+    "wired_limit_mb": 0,
     "trust_remote_code": true,
     "prompt_cache_size": 1
   }
