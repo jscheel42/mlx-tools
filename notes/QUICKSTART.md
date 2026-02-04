@@ -115,6 +115,18 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
+## Benchmarking
+
+```bash
+python3 bench-local.py --runs 3
+```
+
+Override base URL or model ID if needed:
+
+```bash
+python3 bench-local.py --base-url http://localhost:8000/v1 --model mlx-local
+```
+
 ## Configure OpenCode
 
 Add to `~/.config/opencode/opencode.json`:

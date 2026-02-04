@@ -165,6 +165,21 @@ Run the cache test:
 python3 /tmp/test_cache_detailed.py
 ```
 
+## Benchmarking
+
+Run a quick latency and throughput check against the local server:
+
+```bash
+python3 bench-local.py --runs 3
+```
+
+By default this targets `http://localhost:8000/v1` and auto-detects the first
+model returned by `/v1/models`. You can override both:
+
+```bash
+python3 bench-local.py --base-url http://localhost:8000/v1 --model mlx-local
+```
+
 ## Troubleshooting
 
 ### Service won't start
