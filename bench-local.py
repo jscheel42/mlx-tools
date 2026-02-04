@@ -61,9 +61,7 @@ def _run_benchmark(
 def _format_tokens(tokens: float | int | None) -> str:
     if tokens is None:
         return "n/a"
-    if isinstance(tokens, float):
-        return f"{tokens:.1f}"
-    return str(tokens)
+    return str(int(tokens))
 
 
 def main() -> int:
