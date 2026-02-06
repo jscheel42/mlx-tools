@@ -8,6 +8,11 @@
     "top_k": 40,
     "max_tokens": 200000
   },
+  "kv_cache": {
+    "bits": 8,
+    "group_size": 64,
+    "quantized_start": 0
+  },
   "server": {
     "host": "0.0.0.0",
     "port": 8000,
