@@ -78,11 +78,113 @@ echo "  Starting conversion..."
 echo "=================================================="
 echo ""
 
-python -m mlx_lm.convert \
+echo "Detecting model modality..."
+IS_MULTIMODAL=$(python - "$HF_MODEL" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+
+def looks_multimodal(config: dict) -> bool:
+    if not isinstance(config, dict):
+        return False
+
+    multimodal_keys = {
+        "vision_config",
+        "visual",
+        "visual_config",
+        "multimodal_config",
+        "vision_tower",
+        "mm_projector_type",
+        "audio_config",
+    }
+
+    if any(key in config for key in multimodal_keys):
+        return True
+
+    model_type = str(config.get("model_type", "")).lower()
+    if any(tag in model_type for tag in ["vl", "vision", "llava", "pixtral", "mllama"]):
+        return True
+
+    text_config = config.get("text_config", {})
+    if isinstance(text_config, dict) and any(key in text_config for key in multimodal_keys):
+        return True
+
+    return False
+
+
+model_ref = sys.argv[1]
+config = None
+local_config = Path(model_ref) / "config.json"
+
+if local_config.exists():
+    config = json.loads(local_config.read_text())
+else:
+    from huggingface_hub import hf_hub_download
+
+    config_path = hf_hub_download(repo_id=model_ref, filename="config.json")
+    with open(config_path, "r") as f:
+        config = json.load(f)
+
+print("1" if looks_multimodal(config) else "0")
+PY
+)
+
+if [[ "$IS_MULTIMODAL" == "1" ]]; then
+    echo "Detected multimodal model. Using mlx-vlm converter to preserve vision/audio support."
+    uv pip install -U "mlx-vlm[torch]"
+
+    MODEL_TYPE=$(python - "$HF_MODEL" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+model_ref = sys.argv[1]
+local_config = Path(model_ref) / "config.json"
+
+if local_config.exists():
+    config = json.loads(local_config.read_text())
+else:
+    from huggingface_hub import hf_hub_download
+
+    config_path = hf_hub_download(repo_id=model_ref, filename="config.json")
+    with open(config_path, "r") as f:
+        config = json.load(f)
+
+print(config.get("model_type", ""))
+PY
+)
+
+    if ! python - "$MODEL_TYPE" <<'PY'
+import importlib
+import sys
+
+model_type = sys.argv[1]
+try:
+    importlib.import_module(f"mlx_vlm.models.{model_type}")
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+    then
+        echo "Installed mlx-vlm does not support model_type='$MODEL_TYPE'."
+        echo "Installing latest mlx-vlm from GitHub main..."
+        uv pip install -U "git+https://github.com/Blaizzy/mlx-vlm.git" torch torchvision
+    fi
+
+    CONVERT_CMD="mlx_vlm.convert"
+    TRUST_REMOTE_CODE_ARG=""
+else
+    echo "Detected text-only model. Using mlx-lm converter."
+    CONVERT_CMD="mlx_lm.convert"
+    TRUST_REMOTE_CODE_ARG="--trust-remote-code"
+fi
+
+"$CONVERT_CMD" \
     --hf-path "$HF_MODEL" \
     --mlx-path "../../local-models/$OUTPUT_NAME" \
     -q --q-bits "$BITS" \
-    --trust-remote-code
+    ${TRUST_REMOTE_CODE_ARG}
 
 echo ""
 echo "=================================================="

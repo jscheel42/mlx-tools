@@ -1,68 +1,121 @@
-diff --git a/mlx_lm/models/cache.py b/mlx_lm/models/cache.py
-index aecbcb7..308c326 100644
---- a/mlx_lm/models/cache.py
-+++ b/mlx_lm/models/cache.py
-@@ -914,6 +914,21 @@ class BatchKVCache(_BaseCache):
-         """
-         In-place filter to keep just the given indices in the cache.
-         """
-+        if self.keys is None or self.values is None:
-+            self.offset = self.offset[batch_indices]
-+            self.left_padding = self.left_padding[batch_indices]
-+            return
-+        if self.keys.size == 0 or self.values.size == 0:
-+            keep = int(batch_indices.shape[0])
-+            k_shape = list(self.keys.shape)
-+            v_shape = list(self.values.shape)
-+            k_shape[0] = keep
-+            v_shape[0] = keep
-+            self.keys = mx.zeros(tuple(k_shape), self.keys.dtype)
-+            self.values = mx.zeros(tuple(v_shape), self.values.dtype)
-+            self.offset = self.offset[batch_indices]
-+            self.left_padding = self.left_padding[batch_indices]
-+            return
-         self.keys = self.keys[batch_indices]
-         self.values = self.values[batch_indices]
-         self.offset = self.offset[batch_indices]
-diff --git a/mlx_lm/models/glm4_moe_lite.py b/mlx_lm/models/glm4_moe_lite.py
-index 5830251..cc92912 100644
---- a/mlx_lm/models/glm4_moe_lite.py
-+++ b/mlx_lm/models/glm4_moe_lite.py
-@@ -224,10 +224,10 @@ class Glm4MoeLiteAttention(nn.Module):
+diff --git a/mlx_lm/generate.py b/mlx_lm/generate.py
+index ab0bdb8..5bcda7d 100644
+--- a/mlx_lm/generate.py
++++ b/mlx_lm/generate.py
+@@ -314,6 +314,7 @@ def generate_step(
+     kv_group_size: int = 64,
+     quantized_kv_start: int = 0,
+     prompt_progress_callback: Optional[Callable[[int, int], None]] = None,
++    prefill_cache_callback: Optional[Callable[[Any], None]] = None,
+     input_embeddings: Optional[mx.array] = None,
+ ) -> Generator[Tuple[mx.array, mx.array], None, None]:
+     """
+@@ -446,6 +447,9 @@ def generate_step(
+             )
+             mx.clear_cache()
  
-         q_nope = self.embed_q(q_nope)
-         keys = mx.concatenate([kv_latent, k_pe], axis=-1)
-+        values = kv_latent
++        if prefill_cache_callback is not None:
++            prefill_cache_callback(prompt_cache)
++
+         y, logprobs = _step(input_tokens=prompt, input_embeddings=input_embeddings)
  
-         if cache is not None:
--            keys, _ = cache.update_and_fetch(keys, mx.zeros((B, 1, L, 0)))
--        values = keys[..., : -self.qk_rope_head_dim]
-+            keys, values = cache.update_and_fetch(keys, values)
+     mx.async_eval(y, logprobs)
+@@ -697,6 +701,7 @@ def stream_generate(
+     else:
+         kwargs.pop("max_kv_size", None)
+         kwargs.pop("prompt_progress_callback", None)
++        kwargs.pop("prefill_cache_callback", None)
+         token_generator = speculative_generate_step(
+             prompt, model, draft_model, **kwargs
+         )
+@@ -850,6 +855,7 @@ class Batch:
+     samplers: List[Any]
+     logits_processors: List[Any]
+     tokens: List[mx.array]
++    prefill_caches: Optional[List[List[Any]]] = None
  
-         queries = mx.concatenate([q_nope, q_pe], axis=-1)
-
-diff --git a/mlx_lm/models/base.py b/mlx_lm/models/base.py
-index d7c3efb..35f036e 100644
---- a/mlx_lm/models/base.py
-+++ b/mlx_lm/models/base.py
-@@ -73,3 +73,5 @@ def quantized_scaled_dot_product_attention(
-     B, n_q_heads, L, D = queries.shape
-     n_kv_heads = q_keys[0].shape[-3]
-+    el_per_int = 8 * mx.uint32.size // bits
-+    v_dim = q_values[0].shape[-1] * el_per_int
-     n_repeats = n_q_heads // n_kv_heads
-@@ -101,5 +103,5 @@ def quantized_scaled_dot_product_attention(
+     def __len__(self):
+         return len(self.uids)
+@@ -862,6 +868,8 @@ class Batch:
+         self.samplers = [self.samplers[k] for k in keep_idx]
+         self.logits_processors = [self.logits_processors[k] for k in keep_idx]
+         self.tokens = [self.tokens[k] for k in keep_idx]
++        if self.prefill_caches is not None:
++            self.prefill_caches = [self.prefill_caches[k] for k in keep_idx]
+         keep_idx = mx.array(keep_idx, mx.int32)
+         self.y = self.y[keep_idx]
+         for c in self.cache:
+@@ -876,6 +884,10 @@ class Batch:
+         self.samplers.extend(other.samplers)
+         self.logits_processors.extend(other.logits_processors)
+         self.tokens.extend(other.tokens)
++        if self.prefill_caches is not None and other.prefill_caches is not None:
++            self.prefill_caches.extend(other.prefill_caches)
++        elif self.prefill_caches is None:
++            self.prefill_caches = other.prefill_caches
+         for c, o in zip(self.cache, other.cache):
+             c.extend(o)
  
-     if n_repeats > 1:
--        out = mx.reshape(out, (B, n_q_heads, L, D))
-+        out = mx.reshape(out, (B, n_q_heads, L, v_dim))
+@@ -935,6 +947,7 @@ class BatchGenerator:
+         logprobs: mx.array
+         finish_reason: Optional[str]
+         prompt_cache: Callable[[], List[Any]]
++        prompt_only_cache: Optional[List[Any]] = None
  
-     return out
+     def __init__(
+         self,
+@@ -1119,6 +1132,10 @@ class BatchGenerator:
+             c.finalize()
+         mx.clear_cache()
+ 
++        prefill_caches = [
++            [c.extract(i) for c in prompt_cache] for i in range(len(uids))
++        ]
++
+         y, logprobs = self._step(
+             inputs, prompt_cache, samplers, logits_processors, tokens
+         )
+@@ -1135,6 +1152,7 @@ class BatchGenerator:
+             list(samplers),
+             list(logits_processors),
+             tokens,
++            prefill_caches,
+         )
+ 
+     def _step(
+@@ -1245,6 +1263,7 @@ class BatchGenerator:
+             zip(y, batch.uids, batch.num_tokens, batch.max_tokens)
+         ):
+             cache = None
++            prompt_only_cache = None
+             num_tok += 1
+             batch.num_tokens[e] = num_tok
+             if t in self.stop_tokens:
+@@ -1258,7 +1277,18 @@ class BatchGenerator:
+                 keep_idx.append(e)
+             if finish_reason is not None:
+                 cache = batch.extract_cache(e)
+-            responses.append(self.Response(uid, t, logprobs[e], finish_reason, cache))
++                if batch.prefill_caches is not None:
++                    prompt_only_cache = batch.prefill_caches[e]
++            responses.append(
++                self.Response(
++                    uid,
++                    t,
++                    logprobs[e],
++                    finish_reason,
++                    cache,
++                    prompt_only_cache,
++                )
++            )
+ 
+         # Remove any finished completions
+         if len(end_idx):
 diff --git a/mlx_lm/server.py b/mlx_lm/server.py
-index 9c3a078..41c32d9 100644
+index 36695aa..c5dd03c 100644
 --- a/mlx_lm/server.py
 +++ b/mlx_lm/server.py
-@@ -171,7 +171,6 @@ def process_message_content(messages):
+@@ -183,7 +183,6 @@ def process_message_content(messages):
  
  
  class LRUPromptCache:
@@ -70,37 +123,208 @@ index 9c3a078..41c32d9 100644
      @dataclass
      class CacheEntry:
          prompt_cache: List[Any]
-@@ -340,8 +340,11 @@ class GenerationArguments:
-     stop_words: List[str]
+@@ -287,14 +286,40 @@ class LRUPromptCache:
+         )
  
-     max_tokens: int
-     num_draft_tokens: int
-     logprobs: int
-     seed: Optional[int]
-+    kv_bits: Optional[int]
-+    kv_group_size: int
-+    quantized_kv_start: int
+     def fetch_nearest_cache(self, model, tokens):
++        total_tokens = len(tokens)
+         result = self._search(model, tokens)
+         if result.exact is not None:
+             cache_entry = self._extract(result.model, result.exact)
++            if len(result.exact) > 0:
++                if can_trim_prompt_cache(cache_entry.prompt_cache):
++                    trim_prompt_cache(cache_entry.prompt_cache, 1)
++                    logging.debug(
++                        "[LRUPromptCache] hit=exact-adjusted reused=%d total=%d rest=1",
++                        len(result.exact) - 1,
++                        total_tokens,
++                    )
++                    return cache_entry.prompt_cache, tokens[-1:]
++                logging.debug(
++                    "[LRUPromptCache] hit=exact-unusable reason=not_trimmable total=%d",
++                    total_tokens,
++                )
++                return None, tokens
++            logging.debug(
++                "[LRUPromptCache] hit=exact reused=%d total=%d",
++                len(result.exact),
++                total_tokens,
++            )
+             return cache_entry.prompt_cache, []
  
+         if result.shorter is not None:
+             cache_entry = self._extract(result.model, result.shorter)
+             prefix_len = len(result.shorter)
++            logging.debug(
++                "[LRUPromptCache] hit=shorter reused=%d total=%d rest=%d",
++                prefix_len,
++                total_tokens,
++                total_tokens - prefix_len,
++            )
+             return cache_entry.prompt_cache, tokens[prefix_len:]
  
-@@ -657,5 +659,7 @@ class ResponseGenerator:
-             return False
-         if args.seed is not None:
-             return False
-+        if args.kv_bits is not None:
-+            return False
+         if result.longer is not None:
+@@ -304,8 +329,19 @@ class LRUPromptCache:
+                 prefix = min(len(tokens) - 1, result.common_prefix)
+                 num_to_trim = len(result.longer) - prefix
+                 trim_prompt_cache(cache, num_to_trim)
++                logging.debug(
++                    "[LRUPromptCache] hit=longer reused=%d total=%d rest=%d",
++                    prefix,
++                    total_tokens,
++                    total_tokens - prefix,
++                )
+                 return cache, tokens[prefix:]
  
-         return True
-@@ -922,6 +926,9 @@ class ResponseGenerator:
++        logging.debug(
++            "[LRUPromptCache] hit=miss reused=0 total=%d common_prefix=%d",
++            total_tokens,
++            result.common_prefix,
++        )
+         return None, tokens
+ 
+     def insert_cache(self, model, tokens, prompt_cache):
+@@ -801,7 +837,7 @@ class ResponseGenerator:
+ 
+                     ncaches, nbytes = len(self.prompt_cache), self.prompt_cache.nbytes
+                     logging.info(
+-                        f"We have {ncaches} kv caches that take {nbytes/1e9:.2f} GB"
++                        f"We have {ncaches} kv caches that take {nbytes / 1e9:.2f} GB"
+                     )
+ 
+                     (uid,) = batch_generator.insert(
+@@ -902,8 +938,12 @@ class ResponseGenerator:
+ 
+                         if r.finish_reason is not None:
+                             result["rqueue"].put(None)
+-                            self.prompt_cache.insert_cache(
+-                                current_model_key, result["cache_key"], r.prompt_cache
++                            self._insert_prompt_caches(
++                                current_model_key,
++                                result["cache_key"],
++                                r.prompt_cache,
++                                len(result["ctx"].prompt),
++                                prompt_only_cache=r.prompt_only_cache,
+                             )
+                             del batch_results[r.uid]
+ 
+@@ -920,8 +960,11 @@ class ResponseGenerator:
+                             if uid not in batch_results:
+                                 continue
+                             result = batch_results[uid]
+-                            self.prompt_cache.insert_cache(
+-                                current_model_key, result["cache_key"], prompt_cache
++                            self._insert_prompt_caches(
++                                current_model_key,
++                                result["cache_key"],
++                                prompt_cache,
++                                len(result["ctx"].prompt),
+                             )
+                             del batch_results[uid]
+ 
+@@ -937,6 +980,13 @@ class ResponseGenerator:
+             model = self.model_provider.model
+             tokenizer = self.model_provider.tokenizer
+             draft_model = self.model_provider.draft_model
++            prompt_only_cache = None
++
++            def capture_prefill_cache(prefill_cache):
++                nonlocal prompt_only_cache
++                if prompt_only_cache is None:
++                    prompt_only_cache = copy.deepcopy(prefill_cache)
++                    logging.debug("[LRUPromptCache] prefill_capture=ok")
+ 
+             # Prepare the prompt
+             prompt = self._tokenize(tokenizer, request, args)
+@@ -980,7 +1030,7 @@ class ResponseGenerator:
+                     cache += make_prompt_cache(self.model_provider.draft_model)
+ 
+             ncaches, nbytes = len(self.prompt_cache), self.prompt_cache.nbytes
+-            logging.info(f"We have {ncaches} kv caches that take {nbytes/1e9:.2f} GB")
++            logging.info(f"We have {ncaches} kv caches that take {nbytes / 1e9:.2f} GB")
+ 
+             # Process the prompt and generate tokens
+             for gen in stream_generate(
+@@ -994,6 +1044,7 @@ class ResponseGenerator:
                  draft_model=draft_model,
                  num_draft_tokens=args.num_draft_tokens,
                  prompt_progress_callback=progress,
-+                kv_bits=args.kv_bits,
-+                kv_group_size=args.kv_group_size,
-+                quantized_kv_start=args.quantized_kv_start,
++                prefill_cache_callback=capture_prefill_cache,
              ):
-                 top_tokens = None
-                 if args.logprobs > 0:
-@@ -1059,14 +1066,21 @@ class APIHandler(BaseHTTPRequestHandler):
+                 rqueue.put(
+                     Response(
+@@ -1016,8 +1067,12 @@ class ResponseGenerator:
+             rqueue.put(None)
+ 
+             # Save the KV cache again
+-            self.prompt_cache.insert_cache(
+-                self.model_provider.model_key, cache_key, cache
++            self._insert_prompt_caches(
++                self.model_provider.model_key,
++                cache_key,
++                cache,
++                len(prompt),
++                prompt_only_cache=prompt_only_cache,
+             )
+ 
+         except Exception as e:
+@@ -1055,6 +1110,55 @@ class ResponseGenerator:
+     def cli_args(self):
+         return self.model_provider.cli_args
+ 
++    def _insert_prompt_caches(
++        self,
++        model_key,
++        cache_key,
++        prompt_cache,
++        prompt_len: int,
++        prompt_only_cache=None,
++    ):
++        if prompt_only_cache is not None:
++            prompt_only_len = max(0, prompt_len - 1)
++            prompt_only_key = cache_key[:prompt_only_len]
++            self.prompt_cache.insert_cache(
++                model_key, prompt_only_key, prompt_only_cache
++            )
++            logging.debug(
++                "[LRUPromptCache] prompt_only_insert=ok source=prefill_capture "
++                "prompt_len=%d cached_prefix_len=%d full_len=%d",
++                prompt_len,
++                prompt_only_len,
++                len(cache_key),
++            )
++            return
++
++        self.prompt_cache.insert_cache(model_key, cache_key, prompt_cache)
++
++        generated_tokens = len(cache_key) - prompt_len
++        if generated_tokens <= 0:
++            return
++
++        if not can_trim_prompt_cache(prompt_cache):
++            logging.debug(
++                "[LRUPromptCache] prompt_only_insert=skip reason=not_trimmable "
++                "prompt_len=%d full_len=%d",
++                prompt_len,
++                len(cache_key),
++            )
++            return
++
++        prompt_only_cache = copy.deepcopy(prompt_cache)
++        trimmed = trim_prompt_cache(prompt_only_cache, generated_tokens)
++        prompt_only_key = cache_key[:-generated_tokens]
++        self.prompt_cache.insert_cache(model_key, prompt_only_key, prompt_only_cache)
++        logging.debug(
++            "[LRUPromptCache] prompt_only_insert=ok trimmed=%d prompt_len=%d full_len=%d",
++            trimmed,
++            prompt_len,
++            len(cache_key),
++        )
++
+ 
+ class APIHandler(BaseHTTPRequestHandler):
+     def __init__(
+@@ -1124,14 +1228,21 @@ class APIHandler(BaseHTTPRequestHandler):
  
          indent = "\t"  # Backslashes can't be inside of f-strings
          logging.debug(f"Incoming Request Body: {json.dumps(self.body, indent=indent)}")
@@ -125,18 +349,7 @@ index 9c3a078..41c32d9 100644
          self.requested_draft_model = self.body.get("draft_model", "default_model")
          self.num_draft_tokens = self.body.get(
              "num_draft_tokens", self.response_generator.cli_args.num_draft_tokens
-@@ -1097,6 +1111,10 @@ class APIHandler(BaseHTTPRequestHandler):
-         stop_words = stop_words or []
-         stop_words = [stop_words] if isinstance(stop_words, str) else stop_words
- 
-+        self.kv_bits = self.response_generator.cli_args.kv_bits
-+        if self.kv_bits is not None and self.kv_bits <= 0:
-+            self.kv_bits = None
-+
-         # Create the completion request
-         request = request_factories[self.path]()
-         self.handle_completion(request, stop_words)
-@@ -1212,7 +1230,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1285,7 +1396,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": self.object_type,
@@ -145,17 +358,7 @@ index 9c3a078..41c32d9 100644
              "created": self.created,
              "choices": [
                  {
-@@ -1295,6 +1313,9 @@ class APIHandler(BaseHTTPRequestHandler):
-             num_draft_tokens=self.num_draft_tokens,
-             logprobs=self.logprobs,
-             seed=self.seed,
-+            kv_bits=self.kv_bits,
-+            kv_group_size=self.response_generator.cli_args.kv_group_size,
-+            quantized_kv_start=self.response_generator.cli_args.quantized_kv_start,
-         )
- 
-         # Create keepalive callback to send SSE comments during long prompt processing
-@@ -1513,7 +1534,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1609,7 +1720,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": "chat.completion",
@@ -164,7 +367,7 @@ index 9c3a078..41c32d9 100644
              "created": self.created,
              "choices": [],
              "usage": {
-@@ -1612,33 +1633,43 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1712,33 +1823,43 @@ class APIHandler(BaseHTTPRequestHandler):
              file_names = {f.file_path.name for f in repo.refs["main"].files}
              return all(f in file_names for f in files)
  
@@ -235,7 +438,7 @@ index 9c3a078..41c32d9 100644
  
          response = {"object": "list", "data": models}
  
-@@ -1702,6 +1733,11 @@ def main():
+@@ -1803,6 +1924,11 @@ def main():
          type=str,
          help="The path to the MLX model weights, tokenizer, and config",
      )
@@ -247,46 +450,3 @@ index 9c3a078..41c32d9 100644
      parser.add_argument(
          "--adapter-path",
          type=str,
-@@ -1785,6 +1821,30 @@ def main():
-         default=512,
-         help="Default maximum number of tokens to generate (default: 512)",
-     )
-+    parser.add_argument(
-+        "--wired-limit-mb",
-+        type=int,
-+        default=0,
-+        help="Metal wired memory limit in MB (0 uses recommended)",
-+    )
-+    parser.add_argument(
-+        "--kv-bits",
-+        type=int,
-+        default=8,
-+        help="Number of bits for KV cache quantization (default: 8)",
-+    )
-+    parser.add_argument(
-+        "--kv-group-size",
-+        type=int,
-+        default=64,
-+        help="Group size for KV cache quantization (default: 64)",
-+    )
-+    parser.add_argument(
-+        "--quantized-kv-start",
-+        type=int,
-+        default=0,
-+        help="Step to begin KV cache quantization (default: 0)",
-+    )
-     parser.add_argument(
-         "--chat-template-args",
-         type=json.loads,
-@@ -1810,7 +1870,10 @@ def main():
-     )
-     args = parser.parse_args()
-     if mx.metal.is_available():
--        wired_limit = mx.device_info()["max_recommended_working_set_size"]
-+        if args.wired_limit_mb > 0:
-+            wired_limit = args.wired_limit_mb * 2**20
-+        else:
-+            wired_limit = mx.device_info()["max_recommended_working_set_size"]
-         mx.set_wired_limit(wired_limit)
- 
-     logging.basicConfig(

@@ -1,0 +1,9 @@
+You are using a model of type qwen3_5_moe to instantiate a model of type . This is not supported for all configurations of models and can yield errors.
+/Users/jscheel/tools/mlx-tools/.tmp-mlx-lm-upstream/mlx_lm/server.py:1771: UserWarning: mlx_lm.server is not recommended for production as it only implements basic security checks.
+  warnings.warn(
+2026-02-25 01:38:53,265 - INFO - Starting httpd at 127.0.0.1 on port 8091...
+127.0.0.1 - - [25/Feb/2026 01:39:00] "GET /health HTTP/1.1" 200 -
+2026-02-25 01:39:06,782 - INFO - We have 0 kv caches that take 0.00 GB
+127.0.0.1 - - [25/Feb/2026 01:39:06] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-02-25 01:39:07,369 - INFO - Prompt processing progress: 15/16
+127.0.0.1 - - [25/Feb/2026 01:39:14] "POST /v1/chat/completions HTTP/1.1" 404 -

@@ -1,0 +1,28 @@
+You are using a model of type qwen3_5_moe to instantiate a model of type . This is not supported for all configurations of models and can yield errors.
+/Users/jscheel/tools/mlx-tools/mlx-lm-repo/mlx_lm/server.py:1874: UserWarning: mlx_lm.server is not recommended for production as it only implements basic security checks.
+  warnings.warn(
+2026-02-25 02:02:08,206 - INFO - Starting httpd at 127.0.0.1 on port 8091...
+127.0.0.1 - - [25/Feb/2026 02:02:16] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 02:02:23] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-02-25 02:02:23,190 - INFO - We have 0 kv caches that take 0.00 GB
+2026-02-25 02:02:23,309 - INFO - Prompt processing progress: 0/13
+2026-02-25 02:02:23,615 - INFO - Prompt processing progress: 12/13
+2026-02-25 02:02:23,640 - INFO - Prompt processing progress: 13/13
+127.0.0.1 - - [25/Feb/2026 02:02:23] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-02-25 02:02:23,738 - INFO - We have 0 kv caches that take 0.00 GB
+2026-02-25 02:02:23,850 - INFO - Prompt processing progress: 0/19
+2026-02-25 02:02:23,899 - INFO - Prompt processing progress: 18/19
+2026-02-25 02:02:23,922 - INFO - Prompt processing progress: 19/19
+127.0.0.1 - - [25/Feb/2026 02:13:39] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 02:13:39] "GET /v1/models HTTP/1.1" 200 -
+127.0.0.1 - - [25/Feb/2026 02:13:39] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-02-25 02:13:39,444 - INFO - We have 0 kv caches that take 0.00 GB
+2026-02-25 02:13:39,555 - INFO - Prompt processing progress: 0/15
+2026-02-25 02:13:39,978 - INFO - Prompt processing progress: 14/15
+2026-02-25 02:13:40,004 - INFO - Prompt processing progress: 15/15
+127.0.0.1 - - [25/Feb/2026 02:13:40] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-02-25 02:13:40,212 - INFO - We have 0 kv caches that take 0.00 GB
+2026-02-25 02:13:40,354 - INFO - Prompt processing progress: 0/23
+2026-02-25 02:13:40,411 - INFO - Prompt processing progress: 22/23
+2026-02-25 02:13:40,435 - INFO - Prompt processing progress: 23/23
+127.0.0.1 - - [25/Feb/2026 16:43:44] "GET /health HTTP/1.1" 200 -

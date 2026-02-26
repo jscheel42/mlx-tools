@@ -1,12 +1,12 @@
 {
   "name": "Qwen3-Coder-Next",
   "display_name": "Qwen3-Coder-Next-6b",
-  "model_path": "./local-models/Qwen3-Coder-Next-6b",
+  "model_path": "./local-models/Huihui-Qwen3-Coder-Next-6bit",
   "parameters": {
     "temp": 1.0,
     "top_p": 0.95,
     "top_k": 40,
-    "max_tokens": 200000
+    "max_tokens": 150000
   },
   "server": {
     "host": "0.0.0.0",
