@@ -1,0 +1,22 @@
+{
+  "name": "qwen3.5-35b-a3b-text-8bit",
+  "display_name": "Qwen3.5-35B-A3B-TEXT-8bit",
+  "model_path": "./local-models/Qwen/Qwen3.5-35B-A3B-TEXT-8bit",
+  "parameters": {
+    "temp": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repetition_penalty": 1.0,
+    "max_tokens": 150000
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "model_id": "mlx-local",
+    "prompt_cache_size": 20,
+    "wired_limit_mb": 100000,
+    "trust_remote_code": true
+  }
+}

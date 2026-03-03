@@ -117,8 +117,13 @@ deploy/
 
 ### Model Conversion
 ```bash
-./convert-model.sh <hf-model> <name> <bits>  # Convert HuggingFace model
+./convert-model.sh <hf-model> <name> <bits> [auto|text|multimodal]
 ```
+
+- `auto` (default): detect modality and choose converter automatically
+- `text`: force text-only conversion via `mlx_lm.convert`
+- `multimodal`: force multimodal conversion via `mlx_vlm.convert`
+
 **Tip**: Model conversion uses an isolated environment; see `notes/MODEL_CONVERSION.md` for details.
 
 ## Code Style Guidelines (Python)
