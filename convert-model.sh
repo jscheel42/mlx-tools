@@ -6,11 +6,13 @@
 # dependency conflicts. It clones mlx-lm fresh each time to ensure clean conversion.
 #
 # Usage:
-#   ./convert-model.sh <hf-model-path> <output-name> <bits>
+#   ./convert-model.sh <hf-model-path> <output-name> <bits> [auto|text|multimodal]
 #
 # Examples:
 #   ./convert-model.sh 0xSero/MiniMax-M2.1-REAP-50 MiniMax-M2.1-REAP-50-MLX-4bit 4
 #   ./convert-model.sh 0xSero/MiniMax-M2.1-REAP-50 MiniMax-M2.1-REAP-50-MLX-6bit 6
+#   ./convert-model.sh Qwen/Qwen2.5-VL-7B-Instruct Qwen2.5-VL-7B-MLX-4bit 4 multimodal
+#   ./convert-model.sh Qwen/Qwen2.5-VL-7B-Instruct Qwen2.5-VL-7B-TEXT-MLX-4bit 4 text
 #
 
 set -e
@@ -19,6 +21,13 @@ set -e
 HF_MODEL="${1:-0xSero/MiniMax-M2.1-REAP-50}"
 OUTPUT_NAME="${2:-MiniMax-M2.1-REAP-50-MLX-4bit}"
 BITS="${3:-4}"
+CONVERSION_MODE="${4:-auto}"
+
+if [[ "$CONVERSION_MODE" != "auto" && "$CONVERSION_MODE" != "text" && "$CONVERSION_MODE" != "multimodal" ]]; then
+    echo "Error: conversion mode must be one of: auto, text, multimodal"
+    echo "Usage: ./convert-model.sh <hf-model-path> <output-name> <bits> [auto|text|multimodal]"
+    exit 1
+fi
 
 echo "=================================================="
 echo "  MLX Model Conversion"
@@ -27,6 +36,7 @@ echo ""
 echo "Source Model: $HF_MODEL"
 echo "Output Name:  $OUTPUT_NAME"
 echo "Quantization: ${BITS}-bit"
+echo "Mode:         $CONVERSION_MODE"
 echo ""
 echo "This will:"
 echo "  1. Create temporary mlx-lm clone"
@@ -78,7 +88,7 @@ echo "  Starting conversion..."
 echo "=================================================="
 echo ""
 
-echo "Detecting model modality..."
+echo "Resolving conversion mode..."
 IS_MULTIMODAL=$(python - "$HF_MODEL" <<'PY'
 import json
 import sys
@@ -130,8 +140,21 @@ print("1" if looks_multimodal(config) else "0")
 PY
 )
 
-if [[ "$IS_MULTIMODAL" == "1" ]]; then
-    echo "Detected multimodal model. Using mlx-vlm converter to preserve vision/audio support."
+USE_MULTIMODAL=0
+if [[ "$CONVERSION_MODE" == "multimodal" ]]; then
+    USE_MULTIMODAL=1
+elif [[ "$CONVERSION_MODE" == "text" ]]; then
+    USE_MULTIMODAL=0
+else
+    USE_MULTIMODAL="$IS_MULTIMODAL"
+fi
+
+if [[ "$USE_MULTIMODAL" == "1" ]]; then
+    if [[ "$CONVERSION_MODE" == "multimodal" ]]; then
+        echo "Mode forced to multimodal. Using mlx-vlm converter."
+    else
+        echo "Detected multimodal model. Using mlx-vlm converter to preserve vision/audio support."
+    fi
     uv pip install -U "mlx-vlm[torch]"
 
     MODEL_TYPE=$(python - "$HF_MODEL" <<'PY'
@@ -175,7 +198,11 @@ PY
     CONVERT_CMD="mlx_vlm.convert"
     TRUST_REMOTE_CODE_ARG=""
 else
-    echo "Detected text-only model. Using mlx-lm converter."
+    if [[ "$CONVERSION_MODE" == "text" ]]; then
+        echo "Mode forced to text. Using mlx-lm converter."
+    else
+        echo "Detected text-only model. Using mlx-lm converter."
+    fi
     CONVERT_CMD="mlx_lm.convert"
     TRUST_REMOTE_CODE_ARG="--trust-remote-code"
 fi

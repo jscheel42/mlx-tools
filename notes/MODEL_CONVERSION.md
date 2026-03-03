@@ -5,8 +5,14 @@ This guide explains how to convert HuggingFace models to MLX format for use with
 ## Quick Start
 
 ```bash
-./convert-model.sh <hf-model-path> <output-name> <bits>
+./convert-model.sh <hf-model-path> <output-name> <bits> [auto|text|multimodal]
 ```
+
+`mode` controls which converter is used:
+
+- `auto` (default): detect model modality and choose converter automatically
+- `text`: force text-only conversion via `mlx_lm.convert`
+- `multimodal`: force multimodal conversion via `mlx_vlm.convert`
 
 ### Examples
 
@@ -25,6 +31,16 @@ Convert other models:
 ./convert-model.sh meta-llama/Llama-3.1-70B-Instruct Llama-3.1-70B-MLX-4bit 4
 ```
 
+Force text-only conversion for a multimodal checkpoint:
+```bash
+./convert-model.sh Qwen/Qwen2.5-VL-7B-Instruct Qwen2.5-VL-7B-TEXT-MLX-4bit 4 text
+```
+
+Force multimodal conversion:
+```bash
+./convert-model.sh Qwen/Qwen2.5-VL-7B-Instruct Qwen2.5-VL-7B-MLX-4bit 4 multimodal
+```
+
 ## How It Works
 
 The `convert-model.sh` script:
@@ -35,10 +51,11 @@ The `convert-model.sh` script:
    - Installs mlx-lm and dependencies
 
 2. **Converts the model**
-   - Downloads from HuggingFace (if not cached)
-   - Converts to MLX format
-   - Applies quantization (4-bit, 6-bit, etc.)
-   - Saves to `local-models/<output-name>/`
+    - Downloads from HuggingFace (if not cached)
+    - Selects converter based on mode (`auto`, `text`, `multimodal`)
+    - Converts to MLX format
+    - Applies quantization (4-bit, 6-bit, etc.)
+    - Saves to `local-models/<output-name>/`
 
 3. **Cleans up**
    - Removes temporary directory

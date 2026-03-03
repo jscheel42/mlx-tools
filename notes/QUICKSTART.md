@@ -155,12 +155,17 @@ Add to `~/.config/opencode/opencode.json`:
 ### Convert Another Model
 
 ```bash
-./convert-model.sh <hf-model-name> <output-name> <bits>
+./convert-model.sh <hf-model-name> <output-name> <bits> [auto|text|multimodal]
 
 # Examples:
 ./convert-model.sh meta-llama/Llama-3.1-70B-Instruct Llama-3.1-70B-MLX-4bit 4
 ./convert-model.sh mistralai/Mistral-7B-Instruct-v0.2 Mistral-7B-MLX-4bit 4
+./convert-model.sh Qwen/Qwen2.5-VL-7B-Instruct Qwen2.5-VL-7B-TEXT-MLX-4bit 4 text
 ```
+
+- `auto` (default): detect and choose text/multimodal converter
+- `text`: force text-only conversion with `mlx_lm.convert`
+- `multimodal`: force multimodal conversion with `mlx_vlm.convert`
 
 ### Switch Models
 
