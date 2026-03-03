@@ -1,121 +1,18 @@
-diff --git a/mlx_lm/generate.py b/mlx_lm/generate.py
-index ab0bdb8..5bcda7d 100644
---- a/mlx_lm/generate.py
-+++ b/mlx_lm/generate.py
-@@ -314,6 +314,7 @@ def generate_step(
-     kv_group_size: int = 64,
-     quantized_kv_start: int = 0,
-     prompt_progress_callback: Optional[Callable[[int, int], None]] = None,
-+    prefill_cache_callback: Optional[Callable[[Any], None]] = None,
-     input_embeddings: Optional[mx.array] = None,
- ) -> Generator[Tuple[mx.array, mx.array], None, None]:
-     """
-@@ -446,6 +447,9 @@ def generate_step(
-             )
-             mx.clear_cache()
- 
-+        if prefill_cache_callback is not None:
-+            prefill_cache_callback(prompt_cache)
-+
-         y, logprobs = _step(input_tokens=prompt, input_embeddings=input_embeddings)
- 
-     mx.async_eval(y, logprobs)
-@@ -697,6 +701,7 @@ def stream_generate(
-     else:
-         kwargs.pop("max_kv_size", None)
-         kwargs.pop("prompt_progress_callback", None)
-+        kwargs.pop("prefill_cache_callback", None)
-         token_generator = speculative_generate_step(
-             prompt, model, draft_model, **kwargs
-         )
-@@ -850,6 +855,7 @@ class Batch:
-     samplers: List[Any]
-     logits_processors: List[Any]
-     tokens: List[mx.array]
-+    prefill_caches: Optional[List[List[Any]]] = None
- 
-     def __len__(self):
-         return len(self.uids)
-@@ -862,6 +868,8 @@ class Batch:
-         self.samplers = [self.samplers[k] for k in keep_idx]
-         self.logits_processors = [self.logits_processors[k] for k in keep_idx]
-         self.tokens = [self.tokens[k] for k in keep_idx]
-+        if self.prefill_caches is not None:
-+            self.prefill_caches = [self.prefill_caches[k] for k in keep_idx]
-         keep_idx = mx.array(keep_idx, mx.int32)
-         self.y = self.y[keep_idx]
-         for c in self.cache:
-@@ -876,6 +884,10 @@ class Batch:
-         self.samplers.extend(other.samplers)
-         self.logits_processors.extend(other.logits_processors)
-         self.tokens.extend(other.tokens)
-+        if self.prefill_caches is not None and other.prefill_caches is not None:
-+            self.prefill_caches.extend(other.prefill_caches)
-+        elif self.prefill_caches is None:
-+            self.prefill_caches = other.prefill_caches
-         for c, o in zip(self.cache, other.cache):
-             c.extend(o)
- 
-@@ -935,6 +947,7 @@ class BatchGenerator:
-         logprobs: mx.array
-         finish_reason: Optional[str]
-         prompt_cache: Callable[[], List[Any]]
-+        prompt_only_cache: Optional[List[Any]] = None
- 
-     def __init__(
-         self,
-@@ -1119,6 +1132,10 @@ class BatchGenerator:
-             c.finalize()
-         mx.clear_cache()
- 
-+        prefill_caches = [
-+            [c.extract(i) for c in prompt_cache] for i in range(len(uids))
-+        ]
-+
-         y, logprobs = self._step(
-             inputs, prompt_cache, samplers, logits_processors, tokens
-         )
-@@ -1135,6 +1152,7 @@ class BatchGenerator:
-             list(samplers),
-             list(logits_processors),
-             tokens,
-+            prefill_caches,
-         )
- 
-     def _step(
-@@ -1245,6 +1263,7 @@ class BatchGenerator:
-             zip(y, batch.uids, batch.num_tokens, batch.max_tokens)
-         ):
-             cache = None
-+            prompt_only_cache = None
-             num_tok += 1
-             batch.num_tokens[e] = num_tok
-             if t in self.stop_tokens:
-@@ -1258,7 +1277,18 @@ class BatchGenerator:
-                 keep_idx.append(e)
-             if finish_reason is not None:
-                 cache = batch.extract_cache(e)
--            responses.append(self.Response(uid, t, logprobs[e], finish_reason, cache))
-+                if batch.prefill_caches is not None:
-+                    prompt_only_cache = batch.prefill_caches[e]
-+            responses.append(
-+                self.Response(
-+                    uid,
-+                    t,
-+                    logprobs[e],
-+                    finish_reason,
-+                    cache,
-+                    prompt_only_cache,
-+                )
-+            )
- 
-         # Remove any finished completions
-         if len(end_idx):
 diff --git a/mlx_lm/server.py b/mlx_lm/server.py
-index 36695aa..c5dd03c 100644
+index 36695aa..bebbd34 100644
 --- a/mlx_lm/server.py
 +++ b/mlx_lm/server.py
-@@ -183,7 +183,6 @@ def process_message_content(messages):
+@@ -165,6 +165,9 @@ def process_message_content(messages):
+ 
+     """
+     for message in messages:
++        if message.get("role") == "developer":
++            message["role"] = "system"
++
+         content = message.get("content", None)
+         if isinstance(content, list):
+             text_fragments = [
+@@ -183,7 +186,6 @@ def process_message_content(messages):
  
  
  class LRUPromptCache:
@@ -123,7 +20,22 @@ index 36695aa..c5dd03c 100644
      @dataclass
      class CacheEntry:
          prompt_cache: List[Any]
-@@ -287,14 +286,40 @@ class LRUPromptCache:
+@@ -274,9 +276,13 @@ class LRUPromptCache:
+ 
+         logging.debug(f"[LRUPromptCache] Removed {cache_bytes} bytes from the cache")
+ 
+-    def _extract(self, model, tokens):
++    def _extract(self, model, tokens, keep_original=False):
+         cache_entry = self._get(model, tokens)
+         if cache_entry.count == 1:
++            if keep_original:
++                return self.CacheEntry(
++                    copy.deepcopy(cache_entry.prompt_cache), 1, cache_entry.nbytes
++                )
+             self._delete(model, tokens)
+             self._lru.remove((model, tokens))
+             return cache_entry
+@@ -287,14 +293,42 @@ class LRUPromptCache:
          )
  
      def fetch_nearest_cache(self, model, tokens):
@@ -153,7 +65,10 @@ index 36695aa..c5dd03c 100644
              return cache_entry.prompt_cache, []
  
          if result.shorter is not None:
-             cache_entry = self._extract(result.model, result.shorter)
+-            cache_entry = self._extract(result.model, result.shorter)
++            cache_entry = self._extract(
++                result.model, result.shorter, keep_original=True
++            )
              prefix_len = len(result.shorter)
 +            logging.debug(
 +                "[LRUPromptCache] hit=shorter reused=%d total=%d rest=%d",
@@ -164,7 +79,7 @@ index 36695aa..c5dd03c 100644
              return cache_entry.prompt_cache, tokens[prefix_len:]
  
          if result.longer is not None:
-@@ -304,8 +329,19 @@ class LRUPromptCache:
+@@ -304,8 +338,19 @@ class LRUPromptCache:
                  prefix = min(len(tokens) - 1, result.common_prefix)
                  num_to_trim = len(result.longer) - prefix
                  trim_prompt_cache(cache, num_to_trim)
@@ -184,7 +99,64 @@ index 36695aa..c5dd03c 100644
          return None, tokens
  
      def insert_cache(self, model, tokens, prompt_cache):
-@@ -801,7 +837,7 @@ class ResponseGenerator:
+@@ -714,6 +759,31 @@ class ResponseGenerator:
+         else:
+             return tokenizer.encode(request.prompt)
+ 
++    def _tokenize_for_cache_key(self, tokenizer, request, args):
++        if request.request_type == "chat":
++            messages = request.messages
++            tools = request.tools
++            role_mapping = request.role_mapping
++
++            if tokenizer.has_chat_template:
++                process_message_content(messages)
++
++                chat_template_args = self.model_provider.cli_args.chat_template_args
++                if args.chat_template_kwargs:
++                    chat_template_args = chat_template_args.copy()
++                    chat_template_args.update(args.chat_template_kwargs)
++                return tokenizer.apply_chat_template(
++                    messages,
++                    tools=tools,
++                    add_generation_prompt=False,
++                    tokenize=True,
++                    **chat_template_args,
++                )
++            else:
++                return tokenizer.encode(convert_chat(messages, role_mapping))
++        else:
++            return tokenizer.encode(request.prompt)
++
+     def _is_batchable(self, args):
+         if not self.model_provider.is_batchable:
+             return False
+@@ -770,6 +840,9 @@ class ResponseGenerator:
+                 ):
+                     try:
+                         prompt = self._tokenize(current_tokenizer, request, args)
++                        cache_key_prompt = self._tokenize_for_cache_key(
++                            current_tokenizer, request, args
++                        )
+                     except Exception as e:
+                         rqueue.put(e)
+                         continue
+@@ -793,15 +866,20 @@ class ResponseGenerator:
+                     rqueue.put(ctx)
+ 
+                     cache, rest = self.prompt_cache.fetch_nearest_cache(
+-                        current_model_key, prompt
++                        current_model_key, cache_key_prompt
+                     )
+-                    ctx.prompt_cache_count = len(prompt) - len(rest)
++                    ctx.prompt_cache_count = len(cache_key_prompt) - len(rest)
++
++                    gen_suffix_len = len(prompt) - len(cache_key_prompt)
++                    if gen_suffix_len > 0:
++                        rest = list(rest) + list(prompt[-gen_suffix_len:])
++
+                     if cache is None:
+                         cache = make_prompt_cache(self.model_provider.model)
  
                      ncaches, nbytes = len(self.prompt_cache), self.prompt_cache.nbytes
                      logging.info(
@@ -193,50 +165,50 @@ index 36695aa..c5dd03c 100644
                      )
  
                      (uid,) = batch_generator.insert(
-@@ -902,8 +938,12 @@ class ResponseGenerator:
+@@ -813,7 +891,7 @@ class ResponseGenerator:
+                     )
+                     batch_results[uid] = {
+                         "ctx": ctx,
+-                        "cache_key": prompt[:],
++                        "cache_key": list(cache_key_prompt),
+                         "rqueue": rqueue,
+                         "detokenizer": tokenizer.detokenizer,
+                     }
+@@ -884,7 +962,6 @@ class ResponseGenerator:
  
-                         if r.finish_reason is not None:
-                             result["rqueue"].put(None)
--                            self.prompt_cache.insert_cache(
--                                current_model_key, result["cache_key"], r.prompt_cache
-+                            self._insert_prompt_caches(
-+                                current_model_key,
-+                                result["cache_key"],
-+                                r.prompt_cache,
-+                                len(result["ctx"].prompt),
-+                                prompt_only_cache=r.prompt_only_cache,
-                             )
-                             del batch_results[r.uid]
+                     for r in responses:
+                         result = batch_results[r.uid]
+-                        result["cache_key"].append(r.token)
+                         if r.finish_reason != "stop":
+                             result["detokenizer"].add_token(r.token)
  
-@@ -920,8 +960,11 @@ class ResponseGenerator:
-                             if uid not in batch_results:
-                                 continue
-                             result = batch_results[uid]
--                            self.prompt_cache.insert_cache(
--                                current_model_key, result["cache_key"], prompt_cache
-+                            self._insert_prompt_caches(
-+                                current_model_key,
-+                                result["cache_key"],
-+                                prompt_cache,
-+                                len(result["ctx"].prompt),
-                             )
-                             del batch_results[uid]
- 
-@@ -937,6 +980,13 @@ class ResponseGenerator:
-             model = self.model_provider.model
-             tokenizer = self.model_provider.tokenizer
-             draft_model = self.model_provider.draft_model
-+            prompt_only_cache = None
-+
-+            def capture_prefill_cache(prefill_cache):
-+                nonlocal prompt_only_cache
-+                if prompt_only_cache is None:
-+                    prompt_only_cache = copy.deepcopy(prefill_cache)
-+                    logging.debug("[LRUPromptCache] prefill_capture=ok")
+@@ -940,6 +1017,7 @@ class ResponseGenerator:
  
              # Prepare the prompt
              prompt = self._tokenize(tokenizer, request, args)
-@@ -980,7 +1030,7 @@ class ResponseGenerator:
++            cache_key_prompt = self._tokenize_for_cache_key(tokenizer, request, args)
+ 
+             # Start the generation context
+             ctx = GenerationContext(
+@@ -970,17 +1048,22 @@ class ResponseGenerator:
+ 
+             # Load the KV cache
+             cache, rest = self.prompt_cache.fetch_nearest_cache(
+-                self.model_provider.model_key, prompt
++                self.model_provider.model_key, cache_key_prompt
+             )
+-            ctx.prompt_cache_count = len(prompt) - len(rest)
+-            cache_key = prompt[:]
++            ctx.prompt_cache_count = len(cache_key_prompt) - len(rest)
++            cache_key = list(cache_key_prompt)
++
++            gen_suffix_len = len(prompt) - len(cache_key_prompt)
++            if gen_suffix_len > 0:
++                rest = list(rest) + list(prompt[-gen_suffix_len:])
++
+             if cache is None:
+                 cache = make_prompt_cache(self.model_provider.model)
+                 if self.model_provider.draft_model is not None:
                      cache += make_prompt_cache(self.model_provider.draft_model)
  
              ncaches, nbytes = len(self.prompt_cache), self.prompt_cache.nbytes
@@ -245,86 +217,26 @@ index 36695aa..c5dd03c 100644
  
              # Process the prompt and generate tokens
              for gen in stream_generate(
-@@ -994,6 +1044,7 @@ class ResponseGenerator:
-                 draft_model=draft_model,
-                 num_draft_tokens=args.num_draft_tokens,
-                 prompt_progress_callback=progress,
-+                prefill_cache_callback=capture_prefill_cache,
-             ):
-                 rqueue.put(
-                     Response(
-@@ -1016,8 +1067,12 @@ class ResponseGenerator:
-             rqueue.put(None)
+@@ -1006,7 +1089,6 @@ class ResponseGenerator:
+                         ),
+                     )
+                 )
+-                cache_key.append(gen.token)
+ 
+                 if ctx._should_stop:
+                     if self._is_distributed:
+@@ -1017,7 +1099,9 @@ class ResponseGenerator:
  
              # Save the KV cache again
--            self.prompt_cache.insert_cache(
+             self.prompt_cache.insert_cache(
 -                self.model_provider.model_key, cache_key, cache
-+            self._insert_prompt_caches(
 +                self.model_provider.model_key,
 +                cache_key,
 +                cache,
-+                len(prompt),
-+                prompt_only_cache=prompt_only_cache,
              )
  
          except Exception as e:
-@@ -1055,6 +1110,55 @@ class ResponseGenerator:
-     def cli_args(self):
-         return self.model_provider.cli_args
- 
-+    def _insert_prompt_caches(
-+        self,
-+        model_key,
-+        cache_key,
-+        prompt_cache,
-+        prompt_len: int,
-+        prompt_only_cache=None,
-+    ):
-+        if prompt_only_cache is not None:
-+            prompt_only_len = max(0, prompt_len - 1)
-+            prompt_only_key = cache_key[:prompt_only_len]
-+            self.prompt_cache.insert_cache(
-+                model_key, prompt_only_key, prompt_only_cache
-+            )
-+            logging.debug(
-+                "[LRUPromptCache] prompt_only_insert=ok source=prefill_capture "
-+                "prompt_len=%d cached_prefix_len=%d full_len=%d",
-+                prompt_len,
-+                prompt_only_len,
-+                len(cache_key),
-+            )
-+            return
-+
-+        self.prompt_cache.insert_cache(model_key, cache_key, prompt_cache)
-+
-+        generated_tokens = len(cache_key) - prompt_len
-+        if generated_tokens <= 0:
-+            return
-+
-+        if not can_trim_prompt_cache(prompt_cache):
-+            logging.debug(
-+                "[LRUPromptCache] prompt_only_insert=skip reason=not_trimmable "
-+                "prompt_len=%d full_len=%d",
-+                prompt_len,
-+                len(cache_key),
-+            )
-+            return
-+
-+        prompt_only_cache = copy.deepcopy(prompt_cache)
-+        trimmed = trim_prompt_cache(prompt_only_cache, generated_tokens)
-+        prompt_only_key = cache_key[:-generated_tokens]
-+        self.prompt_cache.insert_cache(model_key, prompt_only_key, prompt_only_cache)
-+        logging.debug(
-+            "[LRUPromptCache] prompt_only_insert=ok trimmed=%d prompt_len=%d full_len=%d",
-+            trimmed,
-+            prompt_len,
-+            len(cache_key),
-+        )
-+
- 
- class APIHandler(BaseHTTPRequestHandler):
-     def __init__(
-@@ -1124,14 +1228,21 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1124,14 +1208,21 @@ class APIHandler(BaseHTTPRequestHandler):
  
          indent = "\t"  # Backslashes can't be inside of f-strings
          logging.debug(f"Incoming Request Body: {json.dumps(self.body, indent=indent)}")
@@ -349,7 +261,7 @@ index 36695aa..c5dd03c 100644
          self.requested_draft_model = self.body.get("draft_model", "default_model")
          self.num_draft_tokens = self.body.get(
              "num_draft_tokens", self.response_generator.cli_args.num_draft_tokens
-@@ -1285,7 +1396,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1285,7 +1376,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": self.object_type,
@@ -358,7 +270,7 @@ index 36695aa..c5dd03c 100644
              "created": self.created,
              "choices": [
                  {
-@@ -1609,7 +1720,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1609,7 +1700,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": "chat.completion",
@@ -367,7 +279,7 @@ index 36695aa..c5dd03c 100644
              "created": self.created,
              "choices": [],
              "usage": {
-@@ -1712,33 +1823,43 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1712,33 +1803,43 @@ class APIHandler(BaseHTTPRequestHandler):
              file_names = {f.file_path.name for f in repo.refs["main"].files}
              return all(f in file_names for f in files)
  
@@ -438,7 +350,7 @@ index 36695aa..c5dd03c 100644
  
          response = {"object": "list", "data": models}
  
-@@ -1803,6 +1924,11 @@ def main():
+@@ -1803,6 +1904,11 @@ def main():
          type=str,
          help="The path to the MLX model weights, tokenizer, and config",
      )
