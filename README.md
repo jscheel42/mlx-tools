@@ -1,3 +1,30 @@
+# Current setup
+
+```
+# Create mlx model from qwen base
+./convert-model.sh Qwen/Qwen3.5-35B-A3B Qwen/Qwen3.5-35B-A3B-TEXT-8bit 8 text
+
+# Start deployment with model
+./manage-deployments.sh install qwen3.5-35b-a3b-text-8bit --start
+
+# Update opencode with config
+# ~/.config/opencode/opencode.json
+    "model": "mlx-local/mlx-local",
+    "provider": {
+        "mlx-local": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "MLX Local Server",
+            "options": {
+                "baseURL": "http://localhost:8000/v1"
+            },
+            "models": {
+                "mlx-local": {
+                    "name": "MLX Local Model"
+                }
+            }
+        }
+```
+
 # Qwen3.5
 
 We recommend using the following set of sampling parameters for generation
