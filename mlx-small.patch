@@ -1,259 +1,51 @@
 diff --git a/mlx_lm/server.py b/mlx_lm/server.py
-index 36695aa..a772579 100644
+index 6c69ea7..cffe0c0 100644
 --- a/mlx_lm/server.py
 +++ b/mlx_lm/server.py
-@@ -165,6 +165,9 @@ def process_message_content(messages):
+@@ -9,7 +9,6 @@ import socket
+ import time
+ import uuid
+ import warnings
+-from collections import deque
+ from dataclasses import dataclass
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from pathlib import Path
+@@ -1088,6 +1087,16 @@ class APIHandler(BaseHTTPRequestHandler):
+         self.send_header("Cache-Control", "no-cache")
+         self._set_cors_headers()
  
-     """
-     for message in messages:
-+        if message.get("role") == "developer":
-+            message["role"] = "system"
++    def _safe_write(self, payload: bytes, flush: bool = True) -> bool:
++        try:
++            self.wfile.write(payload)
++            if flush:
++                self.wfile.flush()
++            return True
++        except (BrokenPipeError, ConnectionResetError, OSError):
++            logging.info("Client disconnected before response completed")
++            return False
 +
-         content = message.get("content", None)
-         if isinstance(content, list):
-             text_fragments = [
-@@ -179,11 +182,11 @@ def process_message_content(messages):
-             for tool_call in tool_calls:
-                 if func := tool_call.get("function", False):
-                     if args := func.get("arguments", False):
--                        func["arguments"] = json.loads(args)
-+                        if isinstance(args, (str, bytes, bytearray)):
-+                            func["arguments"] = json.loads(args)
+     def do_OPTIONS(self):
+         self._set_completion_headers(204)
+         self.end_headers()
+@@ -1105,7 +1114,7 @@ class APIHandler(BaseHTTPRequestHandler):
+         if self.path not in request_factories:
+             self._set_completion_headers(404)
+             self.end_headers()
+-            self.wfile.write(b"Not Found")
++            self._safe_write(b"Not Found")
+             return
  
- 
- class LRUPromptCache:
--
-     @dataclass
-     class CacheEntry:
-         prompt_cache: List[Any]
-@@ -274,9 +277,13 @@ class LRUPromptCache:
- 
-         logging.debug(f"[LRUPromptCache] Removed {cache_bytes} bytes from the cache")
- 
--    def _extract(self, model, tokens):
-+    def _extract(self, model, tokens, keep_original=False):
-         cache_entry = self._get(model, tokens)
-         if cache_entry.count == 1:
-+            if keep_original:
-+                return self.CacheEntry(
-+                    copy.deepcopy(cache_entry.prompt_cache), 1, cache_entry.nbytes
-+                )
-             self._delete(model, tokens)
-             self._lru.remove((model, tokens))
-             return cache_entry
-@@ -287,14 +294,42 @@ class LRUPromptCache:
-         )
- 
-     def fetch_nearest_cache(self, model, tokens):
-+        total_tokens = len(tokens)
-         result = self._search(model, tokens)
-         if result.exact is not None:
-             cache_entry = self._extract(result.model, result.exact)
-+            if len(result.exact) > 0:
-+                if can_trim_prompt_cache(cache_entry.prompt_cache):
-+                    trim_prompt_cache(cache_entry.prompt_cache, 1)
-+                    logging.debug(
-+                        "[LRUPromptCache] hit=exact-adjusted reused=%d total=%d rest=1",
-+                        len(result.exact) - 1,
-+                        total_tokens,
-+                    )
-+                    return cache_entry.prompt_cache, tokens[-1:]
-+                logging.debug(
-+                    "[LRUPromptCache] hit=exact-unusable reason=not_trimmable total=%d",
-+                    total_tokens,
-+                )
-+                return None, tokens
-+            logging.debug(
-+                "[LRUPromptCache] hit=exact reused=%d total=%d",
-+                len(result.exact),
-+                total_tokens,
-+            )
-             return cache_entry.prompt_cache, []
- 
-         if result.shorter is not None:
--            cache_entry = self._extract(result.model, result.shorter)
-+            cache_entry = self._extract(
-+                result.model, result.shorter, keep_original=True
-+            )
-             prefix_len = len(result.shorter)
-+            logging.debug(
-+                "[LRUPromptCache] hit=shorter reused=%d total=%d rest=%d",
-+                prefix_len,
-+                total_tokens,
-+                total_tokens - prefix_len,
-+            )
-             return cache_entry.prompt_cache, tokens[prefix_len:]
- 
-         if result.longer is not None:
-@@ -304,8 +339,19 @@ class LRUPromptCache:
-                 prefix = min(len(tokens) - 1, result.common_prefix)
-                 num_to_trim = len(result.longer) - prefix
-                 trim_prompt_cache(cache, num_to_trim)
-+                logging.debug(
-+                    "[LRUPromptCache] hit=longer reused=%d total=%d rest=%d",
-+                    prefix,
-+                    total_tokens,
-+                    total_tokens - prefix,
-+                )
-                 return cache, tokens[prefix:]
- 
-+        logging.debug(
-+            "[LRUPromptCache] hit=miss reused=0 total=%d common_prefix=%d",
-+            total_tokens,
-+            result.common_prefix,
-+        )
-         return None, tokens
- 
-     def insert_cache(self, model, tokens, prompt_cache):
-@@ -714,6 +760,31 @@ class ResponseGenerator:
-         else:
-             return tokenizer.encode(request.prompt)
- 
-+    def _tokenize_for_cache_key(self, tokenizer, request, args):
-+        if request.request_type == "chat":
-+            messages = request.messages
-+            tools = request.tools
-+            role_mapping = request.role_mapping
-+
-+            if tokenizer.has_chat_template:
-+                process_message_content(messages)
-+
-+                chat_template_args = self.model_provider.cli_args.chat_template_args
-+                if args.chat_template_kwargs:
-+                    chat_template_args = chat_template_args.copy()
-+                    chat_template_args.update(args.chat_template_kwargs)
-+                return tokenizer.apply_chat_template(
-+                    messages,
-+                    tools=tools,
-+                    add_generation_prompt=False,
-+                    tokenize=True,
-+                    **chat_template_args,
-+                )
-+            else:
-+                return tokenizer.encode(convert_chat(messages, role_mapping))
-+        else:
-+            return tokenizer.encode(request.prompt)
-+
-     def _is_batchable(self, args):
-         if not self.model_provider.is_batchable:
-             return False
-@@ -770,6 +841,9 @@ class ResponseGenerator:
-                 ):
-                     try:
-                         prompt = self._tokenize(current_tokenizer, request, args)
-+                        cache_key_prompt = self._tokenize_for_cache_key(
-+                            current_tokenizer, request, args
-+                        )
-                     except Exception as e:
-                         rqueue.put(e)
-                         continue
-@@ -793,15 +867,20 @@ class ResponseGenerator:
-                     rqueue.put(ctx)
- 
-                     cache, rest = self.prompt_cache.fetch_nearest_cache(
--                        current_model_key, prompt
-+                        current_model_key, cache_key_prompt
-                     )
--                    ctx.prompt_cache_count = len(prompt) - len(rest)
-+                    ctx.prompt_cache_count = len(cache_key_prompt) - len(rest)
-+
-+                    gen_suffix_len = len(prompt) - len(cache_key_prompt)
-+                    if gen_suffix_len > 0:
-+                        rest = list(rest) + list(prompt[-gen_suffix_len:])
-+
-                     if cache is None:
-                         cache = make_prompt_cache(self.model_provider.model)
- 
-                     ncaches, nbytes = len(self.prompt_cache), self.prompt_cache.nbytes
-                     logging.info(
--                        f"We have {ncaches} kv caches that take {nbytes/1e9:.2f} GB"
-+                        f"We have {ncaches} kv caches that take {nbytes / 1e9:.2f} GB"
-                     )
- 
-                     (uid,) = batch_generator.insert(
-@@ -813,7 +892,7 @@ class ResponseGenerator:
-                     )
-                     batch_results[uid] = {
-                         "ctx": ctx,
--                        "cache_key": prompt[:],
-+                        "cache_key": list(cache_key_prompt),
-                         "rqueue": rqueue,
-                         "detokenizer": tokenizer.detokenizer,
-                     }
-@@ -884,7 +963,6 @@ class ResponseGenerator:
- 
-                     for r in responses:
-                         result = batch_results[r.uid]
--                        result["cache_key"].append(r.token)
-                         if r.finish_reason != "stop":
-                             result["detokenizer"].add_token(r.token)
- 
-@@ -940,6 +1018,7 @@ class ResponseGenerator:
- 
-             # Prepare the prompt
-             prompt = self._tokenize(tokenizer, request, args)
-+            cache_key_prompt = self._tokenize_for_cache_key(tokenizer, request, args)
- 
-             # Start the generation context
-             ctx = GenerationContext(
-@@ -970,17 +1049,22 @@ class ResponseGenerator:
- 
-             # Load the KV cache
-             cache, rest = self.prompt_cache.fetch_nearest_cache(
--                self.model_provider.model_key, prompt
-+                self.model_provider.model_key, cache_key_prompt
+         # Fetch and parse request body
+@@ -1133,7 +1142,7 @@ class APIHandler(BaseHTTPRequestHandler):
+             logging.error(f"JSONDecodeError: {e} - Raw body: {raw_body.decode()}")
+             self._set_completion_headers(400)
+             self.end_headers()
+-            self.wfile.write(
++            self._safe_write(
+                 json.dumps({"error": f"Invalid JSON in request body: {e}"}).encode()
              )
--            ctx.prompt_cache_count = len(prompt) - len(rest)
--            cache_key = prompt[:]
-+            ctx.prompt_cache_count = len(cache_key_prompt) - len(rest)
-+            cache_key = list(cache_key_prompt)
-+
-+            gen_suffix_len = len(prompt) - len(cache_key_prompt)
-+            if gen_suffix_len > 0:
-+                rest = list(rest) + list(prompt[-gen_suffix_len:])
-+
-             if cache is None:
-                 cache = make_prompt_cache(self.model_provider.model)
-                 if self.model_provider.draft_model is not None:
-                     cache += make_prompt_cache(self.model_provider.draft_model)
- 
-             ncaches, nbytes = len(self.prompt_cache), self.prompt_cache.nbytes
--            logging.info(f"We have {ncaches} kv caches that take {nbytes/1e9:.2f} GB")
-+            logging.info(f"We have {ncaches} kv caches that take {nbytes / 1e9:.2f} GB")
- 
-             # Process the prompt and generate tokens
-             for gen in stream_generate(
-@@ -1006,7 +1090,6 @@ class ResponseGenerator:
-                         ),
-                     )
-                 )
--                cache_key.append(gen.token)
- 
-                 if ctx._should_stop:
-                     if self._is_distributed:
-@@ -1017,7 +1100,9 @@ class ResponseGenerator:
- 
-             # Save the KV cache again
-             self.prompt_cache.insert_cache(
--                self.model_provider.model_key, cache_key, cache
-+                self.model_provider.model_key,
-+                cache_key,
-+                cache,
-             )
- 
-         except Exception as e:
-@@ -1124,14 +1209,21 @@ class APIHandler(BaseHTTPRequestHandler):
- 
-         indent = "\t"  # Backslashes can't be inside of f-strings
-         logging.debug(f"Incoming Request Body: {json.dumps(self.body, indent=indent)}")
--        assert isinstance(
--            self.body, dict
--        ), f"Request should be dict, but got {type(self.body)}"
-+        assert isinstance(self.body, dict), (
-+            f"Request should be dict, but got {type(self.body)}"
-+        )
- 
-         # Extract request parameters from the body
+             return
+@@ -1155,6 +1164,13 @@ class APIHandler(BaseHTTPRequestHandler):
          self.stream = self.body.get("stream", False)
          self.stream_options = self.body.get("stream_options", None)
          self.requested_model = self.body.get("model", "default_model")
@@ -267,7 +59,20 @@ index 36695aa..a772579 100644
          self.requested_draft_model = self.body.get("draft_model", "default_model")
          self.num_draft_tokens = self.body.get(
              "num_draft_tokens", self.response_generator.cli_args.num_draft_tokens
-@@ -1285,7 +1377,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1193,7 +1209,11 @@ class APIHandler(BaseHTTPRequestHandler):
+ 
+         # Create the completion request
+         request = request_factories[self.path]()
+-        self.handle_completion(request, stop_words)
++        try:
++            self.handle_completion(request, stop_words)
++        except (BrokenPipeError, ConnectionResetError, OSError):
++            logging.info("Client disconnected while sending response")
++            return
+ 
+     def _validate(
+         self,
+@@ -1298,7 +1318,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": self.object_type,
@@ -276,7 +81,68 @@ index 36695aa..a772579 100644
              "created": self.created,
              "choices": [
                  {
-@@ -1609,7 +1701,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1417,7 +1437,7 @@ class APIHandler(BaseHTTPRequestHandler):
+         except Exception as e:
+             self._set_completion_headers(404)
+             self.end_headers()
+-            self.wfile.write(json.dumps({"error": str(e)}).encode())
++            self._safe_write(json.dumps({"error": f"{e}"}).encode())
+             return
+ 
+         # Prepare the headers
+@@ -1479,8 +1499,9 @@ class APIHandler(BaseHTTPRequestHandler):
+                         tool_calls=tool_formatter(tool_calls),
+                         reasoning_text=reasoning_text,
+                     )
+-                    self.wfile.write(f"data: {json.dumps(resp)}\n\n".encode())
+-                    self.wfile.flush()
++                    if not self._safe_write(f"data: {json.dumps(resp)}\n\n".encode()):
++                        ctx.stop()
++                        return
+                     reasoning_text = ""
+                     text = ""
+                     tool_calls = []
+@@ -1504,8 +1525,9 @@ class APIHandler(BaseHTTPRequestHandler):
+                     tool_calls=tool_formatter(tool_calls),
+                     reasoning_text=reasoning_text,
+                 )
+-                self.wfile.write(f"data: {json.dumps(resp)}\n\n".encode())
+-                self.wfile.flush()
++                if not self._safe_write(f"data: {json.dumps(resp)}\n\n".encode()):
++                    ctx.stop()
++                    return
+                 if (
+                     self.stream_options is not None
+                     and self.stream_options["include_usage"]
+@@ -1515,10 +1537,12 @@ class APIHandler(BaseHTTPRequestHandler):
+                         len(tokens),
+                         ctx.prompt_cache_count,
+                     )
+-                    self.wfile.write(f"data: {json.dumps(resp)}\n\n".encode())
+-                    self.wfile.flush()
+-                self.wfile.write("data: [DONE]\n\n".encode())
+-                self.wfile.flush()
++                    if not self._safe_write(f"data: {json.dumps(resp)}\n\n".encode()):
++                        ctx.stop()
++                        return
++                if not self._safe_write("data: [DONE]\n\n".encode()):
++                    ctx.stop()
++                    return
+             else:
+                 resp = self.generate_response(
+                     text,
+@@ -1539,8 +1563,8 @@ class APIHandler(BaseHTTPRequestHandler):
+                 response_json = json.dumps(resp).encode()
+                 self.send_header("Content-Length", str(len(response_json)))
+                 self.end_headers()
+-                self.wfile.write(response_json)
+-                self.wfile.flush()
++                if not self._safe_write(response_json):
++                    return
+         finally:
+             ctx.stop()
+ 
+@@ -1554,7 +1578,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": "chat.completion",
@@ -285,7 +151,26 @@ index 36695aa..a772579 100644
              "created": self.created,
              "choices": [],
              "usage": {
-@@ -1712,33 +1804,43 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1621,7 +1645,7 @@ class APIHandler(BaseHTTPRequestHandler):
+         else:
+             self._set_completion_headers(404)
+             self.end_headers()
+-            self.wfile.write(b"Not Found")
++            self._safe_write(b"Not Found")
+ 
+     def handle_health_check(self):
+         """
+@@ -1630,8 +1654,7 @@ class APIHandler(BaseHTTPRequestHandler):
+         self._set_completion_headers(200)
+         self.end_headers()
+ 
+-        self.wfile.write('{"status": "ok"}'.encode())
+-        self.wfile.flush()
++        self._safe_write('{"status": "ok"}'.encode())
+ 
+     def handle_models_request(self):
+         """
+@@ -1657,39 +1680,48 @@ class APIHandler(BaseHTTPRequestHandler):
              file_names = {f.file_path.name for f in repo.refs["main"].files}
              return all(f in file_names for f in files)
  
@@ -356,7 +241,14 @@ index 36695aa..a772579 100644
  
          response = {"object": "list", "data": models}
  
-@@ -1803,6 +1905,11 @@ def main():
+         response_json = json.dumps(response).encode()
+-        self.wfile.write(response_json)
+-        self.wfile.flush()
++        self._safe_write(response_json)
+ 
+ 
+ def _run_http_server(
+@@ -1748,6 +1780,11 @@ def main():
          type=str,
          help="The path to the MLX model weights, tokenizer, and config",
      )
