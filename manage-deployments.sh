@@ -106,7 +106,16 @@ get_deployment_path() {
 
 get_service_name() {
     local name="$1"
-    echo "com.local.mlx-$name"
+    local deploy_path
+    deploy_path=$(get_deployment_path "$name" 2>/dev/null || true)
+
+    if [ -n "$deploy_path" ] && [ -f "$deploy_path/config.json" ]; then
+        local config_name
+        config_name=$(python3 -c "import json; c=json.load(open('$deploy_path/config.json')); print(c.get('name', '$name'))")
+        echo "com.local.mlx-$config_name"
+    else
+        echo "com.local.mlx-$name"
+    fi
 }
 
 check_deployment_exists() {
