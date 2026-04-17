@@ -8,9 +8,12 @@
 # Usage:
 #   ./convert-model.sh <hf-model-path> <output-name> <bits> [auto|text|multimodal]
 #
+# Use <bits>=16 for fp16 (no quantization).
+#
 # Examples:
 #   ./convert-model.sh 0xSero/MiniMax-M2.1-REAP-50 MiniMax-M2.1-REAP-50-MLX-4bit 4
 #   ./convert-model.sh 0xSero/MiniMax-M2.1-REAP-50 MiniMax-M2.1-REAP-50-MLX-6bit 6
+#   ./convert-model.sh Qwen/Qwen2.5-VL-7B-Instruct Qwen2.5-VL-7B-MLX-fp16 16
 #   ./convert-model.sh Qwen/Qwen2.5-VL-7B-Instruct Qwen2.5-VL-7B-MLX-4bit 4 multimodal
 #   ./convert-model.sh Qwen/Qwen2.5-VL-7B-Instruct Qwen2.5-VL-7B-TEXT-MLX-4bit 4 text
 #
@@ -35,7 +38,11 @@ echo "=================================================="
 echo ""
 echo "Source Model: $HF_MODEL"
 echo "Output Name:  $OUTPUT_NAME"
-echo "Quantization: ${BITS}-bit"
+if [[ "$BITS" == "16" ]]; then
+    echo "Precision:    fp16 (no quantization)"
+else
+    echo "Quantization: ${BITS}-bit"
+fi
 echo "Mode:         $CONVERSION_MODE"
 echo ""
 echo "This will:"
@@ -207,11 +214,17 @@ else
     TRUST_REMOTE_CODE_ARG="--trust-remote-code"
 fi
 
-"$CONVERT_CMD" \
-    --hf-path "$HF_MODEL" \
-    --mlx-path "../../local-models/$OUTPUT_NAME" \
-    -q --q-bits "$BITS" \
+CONVERT_ARGS=(
+    --hf-path "$HF_MODEL"
+    --mlx-path "../../local-models/$OUTPUT_NAME"
     ${TRUST_REMOTE_CODE_ARG}
+)
+
+if [[ "$BITS" != "16" ]]; then
+    CONVERT_ARGS+=(-q --q-bits "$BITS")
+fi
+
+"${CONVERT_CMD}" "${CONVERT_ARGS[@]}"
 
 echo ""
 echo "=================================================="
