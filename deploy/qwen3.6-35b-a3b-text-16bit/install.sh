@@ -23,6 +23,9 @@ CONFIG_DISPLAY_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE'))
 CONFIG_PORT=$(python3 -c "import json; c=json.loads(open('$CONFIG_FILE').read()); print(c.get('server', {}).get('port', 8000))")
 CONFIG_MODEL_ID=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('model_id', 'mlx-local'))")
 PROMPT_CACHE_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_cache_size', 10))")
+DECODE_CONCURRENCY=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('decode_concurrency', 32))")
+PROMPT_CONCURRENCY=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_concurrency', 8))")
+PREFILL_STEP_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prefill_step_size', 2048))")
 
 TEMP=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('parameters', {}).get('temp', 0.6))")
 TOP_P=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('parameters', {}).get('top_p', 0.95))")
@@ -81,6 +84,9 @@ exec "$PYTHON_BIN" -m mlx_lm server \
     --port $CONFIG_PORT \
     --log-level "$LOG_LEVEL" \
     --prompt-cache-size $PROMPT_CACHE_SIZE \
+    --decode-concurrency $DECODE_CONCURRENCY \
+    --prompt-concurrency $PROMPT_CONCURRENCY \
+    --prefill-step-size $PREFILL_STEP_SIZE \
     $([ "$TRUST_REMOTE_CODE" = "true" ] && echo "--trust-remote-code") \
     --temp $TEMP \
     --top-p $TOP_P \

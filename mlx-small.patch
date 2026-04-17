@@ -1,43 +1,187 @@
+diff --git a/mlx_lm/models/cache.py b/mlx_lm/models/cache.py
+index bb04512..006fa19 100644
+--- a/mlx_lm/models/cache.py
++++ b/mlx_lm/models/cache.py
+@@ -596,15 +596,19 @@ class ArraysCache(_BaseCache):
+         instance = super().__new__(cls)
+         instance.left_padding = None
+         instance.lengths = None
++        instance.batch_size = 0
+         return instance
+ 
+     def __init__(self, size, left_padding: Optional[List[int]] = None):
+         self.cache = [None] * size
++        self.batch_size = 1
+         if left_padding:
+             self.left_padding = mx.array(left_padding)
++            self.batch_size = len(left_padding)
+ 
+     def __setitem__(self, idx, value):
+         self.cache[idx] = value
++        self.batch_size = max(self.batch_size, value.shape[0])
+ 
+     def __getitem__(self, idx):
+         return self.cache[idx]
+@@ -616,36 +620,86 @@ class ArraysCache(_BaseCache):
+     @state.setter
+     def state(self, v):
+         self.cache = v
++        self.batch_size = 0
++        for c in self.cache:
++            if c is not None:
++                self.batch_size = c.shape[0]
++                break
+ 
+     def filter(self, batch_indices):
+         """
+         In-place filter to keep just the given indices in the cache.
+         """
+         self.cache = [c[batch_indices] if c is not None else None for c in self.cache]
++        if self.left_padding is not None:
++            self.left_padding = self.left_padding[batch_indices]
+         if self.lengths is not None:
+             self.lengths = self.lengths[batch_indices]
++        self.batch_size = len(batch_indices)
+ 
+     def extend(self, other):
+         """
+         In-place extend this cache with the other cache.
+         """
+ 
++        def get_batch_size(c):
++            if c.batch_size > 0:
++                return c.batch_size
++            if c.left_padding is not None:
++                return c.left_padding.shape[0]
++            if c.lengths is not None:
++                return c.lengths.shape[0]
++            for s in c.cache:
++                if s is not None:
++                    return s.shape[0]
++            return 0
++
++        self_batch = get_batch_size(self)
++        other_batch = get_batch_size(other)
++
+         def cat(a, b):
++            if a is None and b is None:
++                return None
+             if a is None:
+-                return b
++                if self_batch == 0:
++                    return b
++                shape = list(b.shape)
++                shape[0] = self_batch
++                a = mx.zeros(shape, dtype=b.dtype)
+             if b is None:
+-                return a
+-            return mx.concatenate([a, b])
++                if other_batch == 0:
++                    return a
++                shape = list(a.shape)
++                shape[0] = other_batch
++                b = mx.zeros(shape, dtype=a.dtype)
++            return mx.concatenate([a, b], axis=0)
+ 
+         self.cache = [cat(c, o) for c, o in zip(self.cache, other.cache)]
++        self.batch_size = self_batch + other_batch
++
++        if self.left_padding is not None and other.left_padding is not None:
++            self.left_padding = mx.concatenate([self.left_padding, other.left_padding])
++        else:
++            self.left_padding = None
++
++        if self.lengths is not None and other.lengths is not None:
++            self.lengths = mx.concatenate([self.lengths, other.lengths])
++        else:
++            self.lengths = None
+ 
+     def extract(self, idx):
+         cache = ArraysCache(len(self.cache))
+-        cache.cache = [c[idx : idx + 1] for c in self.cache]
++        cache.cache = [c[idx : idx + 1] if c is not None else None for c in self.cache]
++        if self.left_padding is not None:
++            cache.left_padding = self.left_padding[idx : idx + 1]
++        if self.lengths is not None:
++            cache.lengths = self.lengths[idx : idx + 1]
++        cache.batch_size = 1
+         return cache
+ 
+     def prepare(self, lengths=None, **kwargs):
+         self.lengths = mx.array(lengths)
++        self.batch_size = len(lengths)
+ 
+     def finalize(self):
+         self.lengths = None
+@@ -672,12 +726,21 @@ class ArraysCache(_BaseCache):
+         n_state = len(caches[0].cache)
+         B = len(caches)
+         cache = cls(n_state)
++        cache.batch_size = B
++
++        if all(c.left_padding is not None for c in caches):
++            cache.left_padding = mx.concatenate([c.left_padding for c in caches])
++
++        if all(c.lengths is not None for c in caches):
++            cache.lengths = mx.concatenate([c.lengths for c in caches])
+ 
+         # All caches are empty so return early
+         if all(c.empty() for c in caches):
+             return cache
+ 
+         for e in range(n_state):
++            if all(c[e] is None for c in caches):
++                continue
+             c_init = next(iter(c[e] for c in caches if c[e] is not None))
+             shape = list(c_init.shape)
+             shape[0] = B
+diff --git a/mlx_lm/models/qwen3_5.py b/mlx_lm/models/qwen3_5.py
+index a86710e..a810c90 100644
+--- a/mlx_lm/models/qwen3_5.py
++++ b/mlx_lm/models/qwen3_5.py
+@@ -147,6 +147,16 @@ class GatedDeltaNet(nn.Module):
+ 
+         if cache is not None and cache[0] is not None:
+             conv_state = cache[0]
++            if conv_state.shape[0] != B:
++                n_keep = self.conv_kernel_size - 1
++                if conv_state.shape[0] < B:
++                    pad = mx.zeros(
++                        (B - conv_state.shape[0], n_keep, self.conv_dim),
++                        dtype=conv_state.dtype,
++                    )
++                    conv_state = mx.concatenate([conv_state, pad], axis=0)
++                else:
++                    conv_state = conv_state[:B]
+         else:
+             conv_state = mx.zeros(
+                 (B, self.conv_kernel_size - 1, self.conv_dim),
+diff --git a/mlx_lm/models/qwen3_next.py b/mlx_lm/models/qwen3_next.py
+index d7e508b..0cbc565 100644
+--- a/mlx_lm/models/qwen3_next.py
++++ b/mlx_lm/models/qwen3_next.py
+@@ -246,6 +246,16 @@ class Qwen3NextGatedDeltaNet(nn.Module):
+ 
+         if cache is not None and cache[0] is not None:
+             conv_state = cache[0]
++            if conv_state.shape[0] != B:
++                n_keep = self.conv_kernel_size - 1
++                if conv_state.shape[0] < B:
++                    pad = mx.zeros(
++                        (B - conv_state.shape[0], n_keep, self.conv_dim),
++                        dtype=conv_state.dtype,
++                    )
++                    conv_state = mx.concatenate([conv_state, pad], axis=0)
++                else:
++                    conv_state = conv_state[:B]
+         else:
+             conv_state = mx.zeros(
+                 (B, self.conv_kernel_size - 1, self.conv_dim),
 diff --git a/mlx_lm/server.py b/mlx_lm/server.py
-index 6c69ea7..b51aa2c 100644
+index 33e95a1..8b01bc2 100644
 --- a/mlx_lm/server.py
 +++ b/mlx_lm/server.py
-@@ -1088,6 +1088,16 @@ class APIHandler(BaseHTTPRequestHandler):
-         self.send_header("Cache-Control", "no-cache")
-         self._set_cors_headers()
- 
-+    def _safe_write(self, payload: bytes, flush: bool = True) -> bool:
-+        try:
-+            self.wfile.write(payload)
-+            if flush:
-+                self.wfile.flush()
-+            return True
-+        except (BrokenPipeError, ConnectionResetError, OSError):
-+            logging.info("Client disconnected before response completed")
-+            return False
-+
-     def do_OPTIONS(self):
-         self._set_completion_headers(204)
-         self.end_headers()
-@@ -1105,7 +1115,7 @@ class APIHandler(BaseHTTPRequestHandler):
-         if self.path not in request_factories:
-             self._set_completion_headers(404)
-             self.end_headers()
--            self.wfile.write(b"Not Found")
-+            self._safe_write(b"Not Found")
-             return
- 
-         # Fetch and parse request body
-@@ -1133,7 +1143,7 @@ class APIHandler(BaseHTTPRequestHandler):
-             logging.error(f"JSONDecodeError: {e} - Raw body: {raw_body.decode()}")
-             self._set_completion_headers(400)
-             self.end_headers()
--            self.wfile.write(
-+            self._safe_write(
-                 json.dumps({"error": f"Invalid JSON in request body: {e}"}).encode()
-             )
-             return
-@@ -1155,6 +1165,13 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1148,6 +1148,13 @@ class APIHandler(BaseHTTPRequestHandler):
          self.stream = self.body.get("stream", False)
          self.stream_options = self.body.get("stream_options", None)
          self.requested_model = self.body.get("model", "default_model")
@@ -51,20 +195,7 @@ index 6c69ea7..b51aa2c 100644
          self.requested_draft_model = self.body.get("draft_model", "default_model")
          self.num_draft_tokens = self.body.get(
              "num_draft_tokens", self.response_generator.cli_args.num_draft_tokens
-@@ -1193,7 +1210,11 @@ class APIHandler(BaseHTTPRequestHandler):
- 
-         # Create the completion request
-         request = request_factories[self.path]()
--        self.handle_completion(request, stop_words)
-+        try:
-+            self.handle_completion(request, stop_words)
-+        except (BrokenPipeError, ConnectionResetError, OSError):
-+            logging.info("Client disconnected while sending response")
-+            return
- 
-     def _validate(
-         self,
-@@ -1298,7 +1319,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1291,7 +1298,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": self.object_type,
@@ -73,68 +204,7 @@ index 6c69ea7..b51aa2c 100644
              "created": self.created,
              "choices": [
                  {
-@@ -1417,7 +1438,7 @@ class APIHandler(BaseHTTPRequestHandler):
-         except Exception as e:
-             self._set_completion_headers(404)
-             self.end_headers()
--            self.wfile.write(json.dumps({"error": str(e)}).encode())
-+            self._safe_write(json.dumps({"error": f"{e}"}).encode())
-             return
- 
-         # Prepare the headers
-@@ -1479,8 +1500,9 @@ class APIHandler(BaseHTTPRequestHandler):
-                         tool_calls=tool_formatter(tool_calls),
-                         reasoning_text=reasoning_text,
-                     )
--                    self.wfile.write(f"data: {json.dumps(resp)}\n\n".encode())
--                    self.wfile.flush()
-+                    if not self._safe_write(f"data: {json.dumps(resp)}\n\n".encode()):
-+                        ctx.stop()
-+                        return
-                     reasoning_text = ""
-                     text = ""
-                     tool_calls = []
-@@ -1504,8 +1526,9 @@ class APIHandler(BaseHTTPRequestHandler):
-                     tool_calls=tool_formatter(tool_calls),
-                     reasoning_text=reasoning_text,
-                 )
--                self.wfile.write(f"data: {json.dumps(resp)}\n\n".encode())
--                self.wfile.flush()
-+                if not self._safe_write(f"data: {json.dumps(resp)}\n\n".encode()):
-+                    ctx.stop()
-+                    return
-                 if (
-                     self.stream_options is not None
-                     and self.stream_options["include_usage"]
-@@ -1515,10 +1538,12 @@ class APIHandler(BaseHTTPRequestHandler):
-                         len(tokens),
-                         ctx.prompt_cache_count,
-                     )
--                    self.wfile.write(f"data: {json.dumps(resp)}\n\n".encode())
--                    self.wfile.flush()
--                self.wfile.write("data: [DONE]\n\n".encode())
--                self.wfile.flush()
-+                    if not self._safe_write(f"data: {json.dumps(resp)}\n\n".encode()):
-+                        ctx.stop()
-+                        return
-+                if not self._safe_write("data: [DONE]\n\n".encode()):
-+                    ctx.stop()
-+                    return
-             else:
-                 resp = self.generate_response(
-                     text,
-@@ -1539,8 +1564,8 @@ class APIHandler(BaseHTTPRequestHandler):
-                 response_json = json.dumps(resp).encode()
-                 self.send_header("Content-Length", str(len(response_json)))
-                 self.end_headers()
--                self.wfile.write(response_json)
--                self.wfile.flush()
-+                if not self._safe_write(response_json):
-+                    return
-         finally:
-             ctx.stop()
- 
-@@ -1554,7 +1579,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1548,7 +1555,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": "chat.completion",
@@ -143,26 +213,7 @@ index 6c69ea7..b51aa2c 100644
              "created": self.created,
              "choices": [],
              "usage": {
-@@ -1621,7 +1646,7 @@ class APIHandler(BaseHTTPRequestHandler):
-         else:
-             self._set_completion_headers(404)
-             self.end_headers()
--            self.wfile.write(b"Not Found")
-+            self._safe_write(b"Not Found")
- 
-     def handle_health_check(self):
-         """
-@@ -1630,8 +1655,7 @@ class APIHandler(BaseHTTPRequestHandler):
-         self._set_completion_headers(200)
-         self.end_headers()
- 
--        self.wfile.write('{"status": "ok"}'.encode())
--        self.wfile.flush()
-+        self._safe_write('{"status": "ok"}'.encode())
- 
-     def handle_models_request(self):
-         """
-@@ -1657,39 +1681,48 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1651,33 +1658,43 @@ class APIHandler(BaseHTTPRequestHandler):
              file_names = {f.file_path.name for f in repo.refs["main"].files}
              return all(f in file_names for f in files)
  
@@ -233,14 +284,7 @@ index 6c69ea7..b51aa2c 100644
  
          response = {"object": "list", "data": models}
  
-         response_json = json.dumps(response).encode()
--        self.wfile.write(response_json)
--        self.wfile.flush()
-+        self._safe_write(response_json)
- 
- 
- def _run_http_server(
-@@ -1748,6 +1781,11 @@ def main():
+@@ -1742,6 +1759,11 @@ def main():
          type=str,
          help="The path to the MLX model weights, tokenizer, and config",
      )
@@ -252,3 +296,46 @@ index 6c69ea7..b51aa2c 100644
      parser.add_argument(
          "--adapter-path",
          type=str,
+diff --git a/tests/test_prompt_cache.py b/tests/test_prompt_cache.py
+index 9b6d4e4..a9df5df 100644
+--- a/tests/test_prompt_cache.py
++++ b/tests/test_prompt_cache.py
+@@ -29,7 +29,6 @@ HF_MODEL_PATH = "mlx-community/Qwen1.5-0.5B-Chat-4bit"
+ 
+ 
+ class TestPromptCache(unittest.TestCase):
+-
+     @classmethod
+     def setUpClass(cls):
+         cls.test_dir_fid = tempfile.TemporaryDirectory()
+@@ -655,6 +654,30 @@ class TestPromptCache(unittest.TestCase):
+         c_out = KVCache.merge((c1, c2))
+         self.assertEqual(c_out.keys.shape, (2, 4, 4, 4))
+ 
++    def test_arrays_cache_extend_with_empty_batch(self):
++        full = ArraysCache(2)
++        full[0] = mx.zeros((1, 3, 8))
++
++        empty_1 = ArraysCache(2)
++        empty_2 = ArraysCache(2)
++
++        batch_full = ArraysCache.merge([full])
++        batch_empty = ArraysCache.merge([empty_1, empty_2])
++
++        batch_full.extend(batch_empty)
++        self.assertEqual(batch_full[0].shape, (3, 3, 8))
++
++    def test_arrays_cache_mixed_lengths_clears_lengths(self):
++        with_lengths = ArraysCache(2)
++        with_lengths.prepare(lengths=[5])
++        without_lengths = ArraysCache(2)
++
++        merged = ArraysCache.merge([with_lengths, without_lengths])
++        self.assertIsNone(merged.lengths)
++
++        with_lengths.extend(without_lengths)
++        self.assertIsNone(with_lengths.lengths)
++
+         c1 = RotatingKVCache(max_size=4)
+         c2 = RotatingKVCache(max_size=4)
+         kv = mx.zeros((1, 4, 4, 4))

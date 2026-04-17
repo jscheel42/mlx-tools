@@ -25,13 +25,20 @@ python -m unittest tests.test_models.TestModelLoad.test_llama -v
 
 # Specific test modules
 python -m unittest tests.test_server.TestServer -v
-python -m utter tests.test_tool_parsing -v
+python -m unittest tests.test_tool_parsing -v
 python -m unittest tests.test_prompt_cache -v
 ```
 
 **Tip**: Run individual test methods with `-k`:
 ```bash
 python -m unittest tests.test_models.TestModelLoad.test_llama -v
+```
+
+**Tip**: If the local venv is unavailable, run tests with `uvx` and explicit deps:
+```bash
+cd mlx-lm-repo
+uvx --with mlx --with huggingface_hub --with sentencepiece --with tokenizers --with transformers \
+  python -m unittest tests.test_prompt_cache -v
 ```
 
 ### Linting & Formatting
