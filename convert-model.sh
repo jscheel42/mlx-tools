@@ -162,7 +162,7 @@ if [[ "$USE_MULTIMODAL" == "1" ]]; then
     else
         echo "Detected multimodal model. Using mlx-vlm converter to preserve vision/audio support."
     fi
-    uv pip install -U "mlx-vlm[torch]"
+    uv pip install -U mlx-vlm torch torchvision
 
     MODEL_TYPE=$(python - "$HF_MODEL" <<'PY'
 import json

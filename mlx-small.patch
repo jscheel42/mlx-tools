@@ -1,8 +1,230 @@
+diff --git a/mlx_lm/generate.py b/mlx_lm/generate.py
+index d0913b5..01d0a26 100644
+--- a/mlx_lm/generate.py
++++ b/mlx_lm/generate.py
+@@ -529,7 +529,7 @@ def speculative_generate_step(
+     if not cache.can_trim_prompt_cache(model_cache):
+         types = {type(c).__name__ for c in model_cache if not c.is_trimmable()}
+         raise ValueError(
+-            f"Speculative decoding requires a trimmable prompt cache " f"(got {types})."
++            f"Speculative decoding requires a trimmable prompt cache (got {types})."
+         )
+ 
+     sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
+@@ -1023,6 +1023,9 @@ class PromptProcessingBatch:
+         caches: List[List[Any]],
+         tokens: Optional[List[List[int]]] = None,
+         prefill_step_size: int = 2048,
++        kv_bits: Optional[int] = None,
++        kv_group_size: int = 64,
++        quantized_kv_start: int = 0,
+         samplers: Optional[List[Callable[[mx.array], mx.array]]] = None,
+         fallback_sampler: Optional[Callable[[mx.array], mx.array]] = None,
+         logits_processors: Optional[
+@@ -1037,6 +1040,9 @@ class PromptProcessingBatch:
+         self.tokens = tokens if tokens is not None else [[] for _ in uids]
+ 
+         self.prefill_step_size = prefill_step_size
++        self.kv_bits = kv_bits
++        self.kv_group_size = kv_group_size
++        self.quantized_kv_start = quantized_kv_start
+         self.samplers = samplers if samplers is not None else []
+         self.fallback_sampler = fallback_sampler or (lambda x: mx.argmax(x, axis=-1))
+         self.logits_processors = (
+@@ -1086,6 +1092,9 @@ class PromptProcessingBatch:
+         new_batch.prompt_cache = copy.deepcopy(self.prompt_cache)
+         new_batch.tokens = list(self.tokens)
+         new_batch.prefill_step_size = self.prefill_step_size
++        new_batch.kv_bits = self.kv_bits
++        new_batch.kv_group_size = self.kv_group_size
++        new_batch.quantized_kv_start = self.quantized_kv_start
+         new_batch.samplers = list(self.samplers)
+         new_batch.fallback_sampler = self.fallback_sampler
+         new_batch.logits_processors = list(self.logits_processors)
+@@ -1158,6 +1167,12 @@ class PromptProcessingBatch:
+         while tokens.shape[1] > 0:
+             n_to_process = min(self.prefill_step_size, tokens.shape[1])
+             self.model(tokens[:, :n_to_process], cache=self.prompt_cache)
++            maybe_quantize_kv_cache(
++                self.prompt_cache,
++                quantized_kv_start=self.quantized_kv_start,
++                kv_group_size=self.kv_group_size,
++                kv_bits=self.kv_bits,
++            )
+             mx.eval([c.state for c in self.prompt_cache])
+             mx.clear_cache()
+             tokens = tokens[:, n_to_process:]
+@@ -1194,6 +1209,9 @@ class PromptProcessingBatch:
+             self.logits_processors,
+             self.state_machines,
+             self.max_tokens,
++            kv_bits=self.kv_bits,
++            kv_group_size=self.kv_group_size,
++            quantized_kv_start=self.quantized_kv_start,
+         )
+ 
+         self.uids = []
+@@ -1211,11 +1229,17 @@ class PromptProcessingBatch:
+         model: nn.Module,
+         fallback_sampler: Callable[[mx.array], mx.array],
+         prefill_step_size: int = 2048,
++        kv_bits: Optional[int] = None,
++        kv_group_size: int = 64,
++        quantized_kv_start: int = 0,
+     ):
+         return cls(
+             model=model,
+             fallback_sampler=fallback_sampler,
+             prefill_step_size=prefill_step_size,
++            kv_bits=kv_bits,
++            kv_group_size=kv_group_size,
++            quantized_kv_start=quantized_kv_start,
+             uids=[],
+             caches=[],
+             tokens=[],
+@@ -1259,6 +1283,9 @@ class GenerationBatch:
+         ],
+         state_machines: List[SequenceStateMachine],
+         max_tokens: List[int],
++        kv_bits: Optional[int] = None,
++        kv_group_size: int = 64,
++        quantized_kv_start: int = 0,
+     ):
+         self.model = model
+         self.uids = uids
+@@ -1270,6 +1297,9 @@ class GenerationBatch:
+         self.logits_processors = logits_processors
+         self.state_machines = state_machines
+         self.max_tokens = max_tokens
++        self.kv_bits = kv_bits
++        self.kv_group_size = kv_group_size
++        self.quantized_kv_start = quantized_kv_start
+ 
+         if self.samplers and len(self.samplers) != len(self.uids):
+             raise ValueError("Insufficient number of samplers provided")
+@@ -1331,6 +1361,12 @@ class GenerationBatch:
+         # Forward pass
+         logits = self.model(inputs[:, None], cache=self.prompt_cache)
+         logits = logits[:, -1, :]
++        maybe_quantize_kv_cache(
++            self.prompt_cache,
++            quantized_kv_start=self.quantized_kv_start,
++            kv_group_size=self.kv_group_size,
++            kv_bits=self.kv_bits,
++        )
+ 
+         # Logits processors
+         token_context = []
+@@ -1468,10 +1504,16 @@ class GenerationBatch:
+         cls,
+         model: nn.Module,
+         fallback_sampler: Callable[[mx.array], mx.array],
++        kv_bits: Optional[int] = None,
++        kv_group_size: int = 64,
++        quantized_kv_start: int = 0,
+     ):
+         return cls(
+             model=model,
+             fallback_sampler=fallback_sampler,
++            kv_bits=kv_bits,
++            kv_group_size=kv_group_size,
++            quantized_kv_start=quantized_kv_start,
+             uids=[],
+             inputs=mx.array([], dtype=mx.uint32),
+             prompt_cache=[],
+@@ -1507,6 +1549,9 @@ class BatchGenerator:
+         prefill_batch_size: int = 8,
+         prefill_step_size: int = 2048,
+         max_kv_size: Optional[int] = None,
++        kv_bits: Optional[int] = None,
++        kv_group_size: int = 64,
++        quantized_kv_start: int = 0,
+     ):
+         self.model = model
+         self.max_tokens = max_tokens
+@@ -1517,6 +1562,9 @@ class BatchGenerator:
+         self.prefill_batch_size = prefill_batch_size
+         self.completion_batch_size = max(completion_batch_size, prefill_batch_size)
+         self.max_kv_size = max_kv_size
++        self.kv_bits = kv_bits
++        self.kv_group_size = kv_group_size
++        self.quantized_kv_start = quantized_kv_start
+ 
+         self._default_state_machine = SequenceStateMachine(
+             {"normal": [(seq, None) for seq in stop_tokens]} if stop_tokens else {},
+@@ -1527,8 +1575,17 @@ class BatchGenerator:
+             self.model,
+             self.sampler,
+             prefill_step_size=prefill_step_size,
++            kv_bits=kv_bits,
++            kv_group_size=kv_group_size,
++            quantized_kv_start=quantized_kv_start,
++        )
++        self._generation_batch = GenerationBatch.empty(
++            self.model,
++            self.sampler,
++            kv_bits=kv_bits,
++            kv_group_size=kv_group_size,
++            quantized_kv_start=quantized_kv_start,
+         )
+-        self._generation_batch = GenerationBatch.empty(self.model, self.sampler)
+         self._unprocessed_sequences = deque()
+         self._currently_processing = []
+ 
+@@ -1648,9 +1705,16 @@ class BatchGenerator:
+ 
+     def _make_new_cache(self):
+         if self.max_kv_size is None:
+-            return cache.make_prompt_cache(self.model)
++            prompt_cache = cache.make_prompt_cache(self.model)
++            maybe_quantize_kv_cache(
++                prompt_cache,
++                quantized_kv_start=self.quantized_kv_start,
++                kv_group_size=self.kv_group_size,
++                kv_bits=self.kv_bits,
++            )
++            return prompt_cache
+ 
+-        return [
++        prompt_cache = [
+             (
+                 RotatingKVCache(max_size=self.max_kv_size)
+                 if isinstance(ci, KVCache)
+@@ -1658,6 +1722,13 @@ class BatchGenerator:
+             )
+             for ci in cache.make_prompt_cache(self.model)
+         ]
++        maybe_quantize_kv_cache(
++            prompt_cache,
++            quantized_kv_start=self.quantized_kv_start,
++            kv_group_size=self.kv_group_size,
++            kv_bits=self.kv_bits,
++        )
++        return prompt_cache
+ 
+     def _find_uids(self, uids):
+         uids = set(uids)
 diff --git a/mlx_lm/models/cache.py b/mlx_lm/models/cache.py
-index bb04512..006fa19 100644
+index bb04512..c79e975 100644
 --- a/mlx_lm/models/cache.py
 +++ b/mlx_lm/models/cache.py
-@@ -596,15 +596,19 @@ class ArraysCache(_BaseCache):
+@@ -1,13 +1,14 @@
+ # Copyright © 2023-2024 Apple Inc.
+ 
+ import copy
++import time
+ from collections import deque
+ from dataclasses import dataclass
+ from typing import Any, Dict, List, Optional
+ 
+ import mlx.core as mx
+ import mlx.nn as nn
+-from mlx.utils import tree_flatten, tree_map, tree_unflatten
++from mlx.utils import tree_flatten, tree_map, tree_reduce, tree_unflatten
+ 
+ from .base import create_causal_mask
+ 
+@@ -596,15 +597,19 @@ class ArraysCache(_BaseCache):
          instance = super().__new__(cls)
          instance.left_padding = None
          instance.lengths = None
@@ -22,7 +244,7 @@ index bb04512..006fa19 100644
  
      def __getitem__(self, idx):
          return self.cache[idx]
-@@ -616,36 +620,86 @@ class ArraysCache(_BaseCache):
+@@ -616,36 +621,86 @@ class ArraysCache(_BaseCache):
      @state.setter
      def state(self, v):
          self.cache = v
@@ -113,7 +335,7 @@ index bb04512..006fa19 100644
  
      def finalize(self):
          self.lengths = None
-@@ -672,12 +726,21 @@ class ArraysCache(_BaseCache):
+@@ -672,12 +727,21 @@ class ArraysCache(_BaseCache):
          n_state = len(caches[0].cache)
          B = len(caches)
          cache = cls(n_state)
@@ -135,6 +357,244 @@ index bb04512..006fa19 100644
              c_init = next(iter(c[e] for c in caches if c[e] is not None))
              shape = list(c_init.shape)
              shape[0] = B
+@@ -1594,6 +1658,8 @@ class LRUPromptCache:
+         prompt_cache: List[Any]
+         nbytes: int
+         cache_type: str
++        created_ts: float
++        last_access_ts: float
+ 
+     class CacheOrder:
+         def __init__(self, ordering: List[str] = ["assistant", "user", "system"]):
+@@ -1606,6 +1672,11 @@ class LRUPromptCache:
+         def push(self, model: Any, tokens: List[Any], cache_type: str = "assistant"):
+             self._lrus[cache_type].append((model, tokens))
+ 
++        def pushleft(
++            self, model: Any, tokens: List[Any], cache_type: str = "assistant"
++        ):
++            self._lrus[cache_type].appendleft((model, tokens))
++
+         def remove(self, model: Any, tokens: List[Any]):
+             for cache_type in self._ordering:
+                 try:
+@@ -1624,14 +1695,126 @@ class LRUPromptCache:
+                 i += 1
+             return lru_b.popleft()
+ 
+-    def __init__(self, max_size: int = 10, max_bytes: int = 1 << 63):
++    def __init__(
++        self,
++        max_size: int = 10,
++        max_bytes: int = 1 << 63,
++        ttl_seconds: int = 0,
++        pin_largest_session: bool = False,
++        pinned_max_bytes: int = 0,
++    ):
+         self.max_size = max_size
+         self.max_bytes = max_bytes
++        self.ttl_seconds = ttl_seconds
++        self.pin_largest_session = pin_largest_session
++        self.pinned_max_bytes = pinned_max_bytes
+         self._trie = PromptTrie()
+         self._lru = LRUPromptCache.CacheOrder()
+         self._n_bytes = 0
+         self._n_bytes_by_type = {k: 0 for k in self._lru._ordering}
+ 
++    @staticmethod
++    def _is_prefix(a: List[int], b: List[int]):
++        if len(a) > len(b):
++            return False
++        return a == b[: len(a)]
++
++    def _touch(self, model: Any, tokens: List[int], entry: CacheEntry):
++        entry.last_access_ts = time.time()
++        self._lru.remove(model, tokens)
++        self._lru.push(model, tokens, entry.cache_type)
++
++    def _remove_entry(self, model: Any, tokens: List[int], entry: CacheEntry):
++        self._trie.pop(model, tokens)
++        self._lru.remove(model, tokens)
++        self._n_bytes -= entry.nbytes
++        self._n_bytes_by_type[entry.cache_type] -= entry.nbytes
++
++    def _evict_stale(self):
++        if self.ttl_seconds <= 0:
++            return
++        now = time.time()
++        to_remove = []
++        for cache_type in self._lru._ordering:
++            for model, tokens in list(self._lru._lrus[cache_type]):
++                entry = self._trie.get(model, tokens)
++                if now - entry.last_access_ts > self.ttl_seconds:
++                    to_remove.append((model, tokens, entry))
++        for model, tokens, entry in to_remove:
++            self._remove_entry(model, tokens, entry)
++
++    def _largest_session(self):
++        best = None
++        for cache_type in self._lru._ordering:
++            for model, tokens in self._lru._lrus[cache_type]:
++                if best is None or len(tokens) > len(best[1]):
++                    best = (model, tokens)
++        return best
++
++    def _pinned_tokens(self):
++        if not self.pin_largest_session:
++            return None
++        largest = self._largest_session()
++        if largest is None:
++            return None
++        return largest
++
++    def _is_pinned_entry(
++        self, model: Any, tokens: List[int], pinned: Optional[tuple[Any, List[int]]]
++    ):
++        if pinned is None:
++            return False
++        pinned_model, pinned_tokens = pinned
++        if model != pinned_model:
++            return False
++        return self._is_prefix(tokens, pinned_tokens) or self._is_prefix(
++            pinned_tokens, tokens
++        )
++
++    def _pinned_bytes(self, pinned):
++        if pinned is None:
++            return 0
++        total = 0
++        for cache_type in self._lru._ordering:
++            for model, tokens in self._lru._lrus[cache_type]:
++                if self._is_pinned_entry(model, tokens, pinned):
++                    total += self._trie.get(model, tokens).nbytes
++        return total
++
++    def _pop_entry(self, allow_pinned: bool = False):
++        pinned = self._pinned_tokens()
++        temp = []
++        while len(self._lru) > 0:
++            model, tokens = self._lru.pop()
++            entry = self._trie.get(model, tokens)
++            if allow_pinned or not self._is_pinned_entry(model, tokens, pinned):
++                for restore_model, restore_tokens, restore_type in reversed(temp):
++                    self._lru.pushleft(restore_model, restore_tokens, restore_type)
++                return model, tokens, entry
++            temp.append((model, tokens, entry.cache_type))
++
++        for restore_model, restore_tokens, restore_type in reversed(temp):
++            self._lru.pushleft(restore_model, restore_tokens, restore_type)
++        return None
++
++    def _evict_one(self):
++        pinned = self._pinned_tokens()
++        allow_pinned = False
++        if (
++            self.pinned_max_bytes > 0
++            and self._pinned_bytes(pinned) > self.pinned_max_bytes
++        ):
++            allow_pinned = True
++
++        pop = self._pop_entry(allow_pinned=allow_pinned)
++        if pop is None and not allow_pinned:
++            pop = self._pop_entry(allow_pinned=True)
++        if pop is None:
++            return False
++        model, tokens, entry = pop
++        self._remove_entry(model, tokens, entry)
++        return True
++
+     def __len__(self):
+         return len(self._lru)
+ 
+@@ -1640,15 +1823,18 @@ class LRUPromptCache:
+         return self._n_bytes
+ 
+     def fetch_nearest_cache(self, model: Any, tokens: List[int]):
++        self._evict_stale()
+         result = self._trie.search(model, tokens)
+         if result.exact is not None:
+             cache_entry = self._trie.get(result.model, result.exact)
++            self._touch(result.model, result.exact, cache_entry)
+             return copy.deepcopy(cache_entry.prompt_cache), []
+ 
+         short_length = len(result.shorter) if result.shorter is not None else 0
+         if result.longer is not None and result.common_prefix > short_length:
+             cache_entry = self._trie.get(result.model, result.longer)
+             if can_trim_prompt_cache(cache_entry.prompt_cache):
++                self._touch(result.model, result.longer, cache_entry)
+                 cache = copy.deepcopy(cache_entry.prompt_cache)
+                 prefix = min(len(tokens) - 1, result.common_prefix)
+                 num_to_trim = len(result.longer) - prefix
+@@ -1657,6 +1843,7 @@ class LRUPromptCache:
+ 
+         if short_length > 0:
+             cache_entry = self._trie.get(result.model, result.shorter)
++            self._touch(result.model, result.shorter, cache_entry)
+             return copy.deepcopy(cache_entry.prompt_cache), tokens[short_length:]
+ 
+         return None, tokens
+@@ -1669,9 +1856,16 @@ class LRUPromptCache:
+         *,
+         cache_type: str = "assistant",
+     ):
++        self._evict_stale()
++
++        now = time.time()
+         # Make the cache entry
+         entry = LRUPromptCache.CacheEntry(
+-            prompt_cache, sum(c.nbytes for c in prompt_cache), cache_type
++            prompt_cache,
++            sum(c.nbytes for c in prompt_cache),
++            cache_type,
++            now,
++            now,
+         )
+ 
+         # Insert into the trie and update the byte counter and lru position
+@@ -1693,33 +1887,26 @@ class LRUPromptCache:
+                 self._lru.remove(model, tokens[:prefix_len])
+ 
+         # Ensure we match the constraints
+-        if len(self._lru) > self.max_size:
+-            model, tokens = self._lru.pop()
+-            entry = self._trie.pop(model, tokens)
+-            self._n_bytes -= entry.nbytes
+-            self._n_bytes_by_type[entry.cache_type] -= entry.nbytes
++        while len(self._lru) > self.max_size:
++            if not self._evict_one():
++                break
+         while self._n_bytes > self.max_bytes:
+-            model, tokens = self._lru.pop()
+-            entry = self._trie.pop(model, tokens)
+-            self._n_bytes -= entry.nbytes
+-            self._n_bytes_by_type[entry.cache_type] -= entry.nbytes
++            if not self._evict_one():
++                break
+ 
+     def trim_to(
+         self, *, n_sequences: Optional[int] = None, n_bytes: Optional[int] = None
+     ):
++        self._evict_stale()
+         n_sequences = max(0, n_sequences) if n_sequences is not None else 1 << 63
+         n_bytes = max(0, n_bytes) if n_bytes is not None else 1 << 63
+ 
+         while len(self._lru) > n_sequences:
+-            model, tokens = self._lru.pop()
+-            entry = self._trie.pop(model, tokens)
+-            self._n_bytes -= entry.nbytes
+-            self._n_bytes_by_type[entry.cache_type] -= entry.nbytes
++            if not self._evict_one():
++                break
+         while self._n_bytes > n_bytes:
+-            model, tokens = self._lru.pop()
+-            entry = self._trie.pop(model, tokens)
+-            self._n_bytes -= entry.nbytes
+-            self._n_bytes_by_type[entry.cache_type] -= entry.nbytes
++            if not self._evict_one():
++                break
+ 
+     def stats_by_type(self):
+         result = {}
 diff --git a/mlx_lm/models/qwen3_5.py b/mlx_lm/models/qwen3_5.py
 index a86710e..a810c90 100644
 --- a/mlx_lm/models/qwen3_5.py
@@ -178,10 +638,69 @@ index d7e508b..0cbc565 100644
              conv_state = mx.zeros(
                  (B, self.conv_kernel_size - 1, self.conv_dim),
 diff --git a/mlx_lm/server.py b/mlx_lm/server.py
-index 33e95a1..8b01bc2 100644
+index 33e95a1..e898d94 100644
 --- a/mlx_lm/server.py
 +++ b/mlx_lm/server.py
-@@ -1148,6 +1148,13 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -182,6 +182,9 @@ class GenerationArguments:
+ 
+     max_tokens: int
+     num_draft_tokens: int
++    kv_bits: Optional[int]
++    kv_group_size: int
++    quantized_kv_start: int
+     logprobs: bool
+     top_logprobs: int
+     seed: Optional[int]
+@@ -664,7 +667,11 @@ class ResponseGenerator:
+         return sm, sequences
+ 
+     def _is_batchable(self, args):
+-        return self.model_provider.is_batchable and args.seed is None
++        return (
++            self.model_provider.is_batchable
++            and args.seed is None
++            and args.kv_bits is None
++        )
+ 
+     def _generate(self):
+         current_model = None
+@@ -796,6 +803,9 @@ class ResponseGenerator:
+                         completion_batch_size=self.cli_args.decode_concurrency,
+                         prefill_batch_size=self.cli_args.prompt_concurrency,
+                         prefill_step_size=self.cli_args.prefill_step_size,
++                        kv_bits=args.kv_bits,
++                        kv_group_size=args.kv_group_size,
++                        quantized_kv_start=args.quantized_kv_start,
+                     )
+                     unprocessed_requests.append((rqueue, request, args))
+                     continue
+@@ -958,6 +968,9 @@ class ResponseGenerator:
+                 num_draft_tokens=args.num_draft_tokens,
+                 prompt_progress_callback=progress,
+                 prefill_step_size=self.cli_args.prefill_step_size,
++                kv_bits=args.kv_bits,
++                kv_group_size=args.kv_group_size,
++                quantized_kv_start=args.quantized_kv_start,
+             ):
+                 finish_reason = gen.finish_reason
+                 sm_state, match_sequence, current_state = sm.match(sm_state, gen.token)
+@@ -986,13 +999,13 @@ class ResponseGenerator:
+                 if finish_reason is not None:
+                     break
+ 
+-            rqueue.put(None)
+-
+             # Save the KV cache again
+             self.prompt_cache.insert_cache(
+                 self.model_provider.model_key, cache_key, cache
+             )
+ 
++            rqueue.put(None)
++
+         except Exception as e:
+             rqueue.put(e)
+ 
+@@ -1148,6 +1161,13 @@ class APIHandler(BaseHTTPRequestHandler):
          self.stream = self.body.get("stream", False)
          self.stream_options = self.body.get("stream_options", None)
          self.requested_model = self.body.get("model", "default_model")
@@ -195,7 +714,7 @@ index 33e95a1..8b01bc2 100644
          self.requested_draft_model = self.body.get("draft_model", "default_model")
          self.num_draft_tokens = self.body.get(
              "num_draft_tokens", self.response_generator.cli_args.num_draft_tokens
-@@ -1291,7 +1298,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1291,7 +1311,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": self.object_type,
@@ -204,7 +723,17 @@ index 33e95a1..8b01bc2 100644
              "created": self.created,
              "choices": [
                  {
-@@ -1548,7 +1555,7 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1386,6 +1406,9 @@ class APIHandler(BaseHTTPRequestHandler):
+             stop_words=stop_words,
+             max_tokens=self.max_tokens,
+             num_draft_tokens=self.num_draft_tokens,
++            kv_bits=self.response_generator.cli_args.kv_bits,
++            kv_group_size=self.response_generator.cli_args.kv_group_size,
++            quantized_kv_start=self.response_generator.cli_args.quantized_kv_start,
+             logprobs=self.logprobs,
+             top_logprobs=self.top_logprobs,
+             seed=self.seed,
+@@ -1548,7 +1571,7 @@ class APIHandler(BaseHTTPRequestHandler):
              "id": self.request_id,
              "system_fingerprint": self.system_fingerprint,
              "object": "chat.completion",
@@ -213,7 +742,7 @@ index 33e95a1..8b01bc2 100644
              "created": self.created,
              "choices": [],
              "usage": {
-@@ -1651,33 +1658,43 @@ class APIHandler(BaseHTTPRequestHandler):
+@@ -1651,33 +1674,43 @@ class APIHandler(BaseHTTPRequestHandler):
              file_names = {f.file_path.name for f in repo.refs["main"].files}
              return all(f in file_names for f in files)
  
@@ -284,7 +813,21 @@ index 33e95a1..8b01bc2 100644
  
          response = {"object": "list", "data": models}
  
-@@ -1742,6 +1759,11 @@ def main():
+@@ -1727,7 +1760,12 @@ def run(
+     handler_class=APIHandler,
+ ):
+     group = mx.distributed.init()
+-    prompt_cache = LRUPromptCache(model_provider.cli_args.prompt_cache_size)
++    prompt_cache = LRUPromptCache(
++        model_provider.cli_args.prompt_cache_size,
++        ttl_seconds=model_provider.cli_args.prompt_cache_ttl_seconds,
++        pin_largest_session=model_provider.cli_args.prompt_cache_pin_largest_session,
++        pinned_max_bytes=model_provider.cli_args.prompt_cache_pinned_max_bytes,
++    )
+     response_generator = ResponseGenerator(model_provider, prompt_cache)
+     if group.rank() == 0:
+         _run_http_server(host, port, response_generator)
+@@ -1742,6 +1780,11 @@ def main():
          type=str,
          help="The path to the MLX model weights, tokenizer, and config",
      )
@@ -296,11 +839,74 @@ index 33e95a1..8b01bc2 100644
      parser.add_argument(
          "--adapter-path",
          type=str,
+@@ -1866,11 +1909,46 @@ def main():
+         type=_parse_size,
+         help="Maximum size in bytes of the KV caches",
+     )
++    parser.add_argument(
++        "--prompt-cache-ttl-seconds",
++        type=int,
++        default=0,
++        help="Expire prompt cache entries not used for this many seconds (0 disables TTL)",
++    )
++    parser.add_argument(
++        "--prompt-cache-pin-largest-session",
++        action="store_true",
++        help="Protect the largest prompt-cache session from eviction when possible",
++    )
++    parser.add_argument(
++        "--prompt-cache-pinned-max-bytes",
++        type=_parse_size,
++        default=0,
++        help="Maximum bytes reserved for the pinned largest session (0 disables cap)",
++    )
+     parser.add_argument(
+         "--pipeline",
+         action="store_true",
+         help="Use pipelining instead of tensor parallelism",
+     )
++    parser.add_argument(
++        "--kv-bits",
++        type=int,
++        choices=[2, 3, 4, 6, 8],
++        help="KV cache quantization bits",
++    )
++    parser.add_argument(
++        "--kv-group-size",
++        type=int,
++        default=64,
++        help="Group size for KV cache quantization",
++    )
++    parser.add_argument(
++        "--quantized-kv-start",
++        type=int,
++        default=0,
++        help="Token offset where KV quantization starts",
++    )
+     args = parser.parse_args()
+     if mx.metal.is_available():
+         wired_limit = mx.device_info()["max_recommended_working_set_size"]
 diff --git a/tests/test_prompt_cache.py b/tests/test_prompt_cache.py
-index 9b6d4e4..a9df5df 100644
+index 9b6d4e4..70e3877 100644
 --- a/tests/test_prompt_cache.py
 +++ b/tests/test_prompt_cache.py
-@@ -29,7 +29,6 @@ HF_MODEL_PATH = "mlx-community/Qwen1.5-0.5B-Chat-4bit"
+@@ -4,6 +4,7 @@ import copy
+ import os
+ import tempfile
+ import unittest
++from unittest import mock
+ 
+ import mlx.core as mx
+ 
+@@ -16,6 +17,7 @@ from mlx_lm.models.cache import (
+     CacheList,
+     ChunkedKVCache,
+     KVCache,
++    LRUPromptCache,
+     QuantizedKVCache,
+     RotatingKVCache,
+     load_prompt_cache,
+@@ -29,7 +31,6 @@ HF_MODEL_PATH = "mlx-community/Qwen1.5-0.5B-Chat-4bit"
  
  
  class TestPromptCache(unittest.TestCase):
@@ -308,7 +914,21 @@ index 9b6d4e4..a9df5df 100644
      @classmethod
      def setUpClass(cls):
          cls.test_dir_fid = tempfile.TemporaryDirectory()
-@@ -655,6 +654,30 @@ class TestPromptCache(unittest.TestCase):
+@@ -364,6 +365,13 @@ class TestPromptCache(unittest.TestCase):
+             self.assertEqual(tok, toks[i])
+             self.assertTrue(mx.allclose(logits, all_logits[i], rtol=4e-2))
+ 
++    def test_quantized_cache_nbytes(self):
++        c = KVCache()
++        kv = mx.zeros((1, 2, 4, 64))
++        c.update_and_fetch(kv, kv)
++        q = c.to_quantized(bits=8, group_size=64)
++        self.assertGreater(q.nbytes, 0)
++
+     def test_cache_list(self):
+         c = CacheList(KVCache(), KVCache())
+         self.assertTrue(c.is_trimmable())
+@@ -655,6 +663,30 @@ class TestPromptCache(unittest.TestCase):
          c_out = KVCache.merge((c1, c2))
          self.assertEqual(c_out.keys.shape, (2, 4, 4, 4))
  
@@ -339,3 +959,45 @@ index 9b6d4e4..a9df5df 100644
          c1 = RotatingKVCache(max_size=4)
          c2 = RotatingKVCache(max_size=4)
          kv = mx.zeros((1, 4, 4, 4))
+@@ -727,6 +759,41 @@ class TestPromptCache(unittest.TestCase):
+         expected = create_causal_mask(1, offset=32, window_size=4)
+         self.assertTrue(mx.array_equal(mask, expected))
+ 
++    def test_lru_prompt_cache_ttl_eviction(self):
++        cache = LRUPromptCache(max_size=10, ttl_seconds=5)
++        kv = KVCache()
++        x = mx.zeros((1, 2, 4, 64))
++        kv.update_and_fetch(x, x)
++
++        with mock.patch("mlx_lm.models.cache.time.time", side_effect=[100.0, 100.0]):
++            cache.insert_cache("m", [1, 2, 3], [kv])
++
++        with mock.patch("mlx_lm.models.cache.time.time", return_value=106.0):
++            hit, rest = cache.fetch_nearest_cache("m", [1, 2, 3])
++
++        self.assertIsNone(hit)
++        self.assertEqual(rest, [1, 2, 3])
++        self.assertEqual(len(cache), 0)
++
++    def test_lru_prompt_cache_pin_largest_session(self):
++        cache = LRUPromptCache(max_size=3, pin_largest_session=True)
++
++        def make_entry():
++            arr = ArraysCache(1)
++            arr[0] = mx.zeros((1, 4, 64))
++            return [arr]
++
++        cache.insert_cache("m", [1], make_entry(), cache_type="system")
++        cache.insert_cache("m", [1, 2], make_entry(), cache_type="user")
++        cache.insert_cache("m", [1, 2, 3], make_entry(), cache_type="assistant")
++        cache.insert_cache("m", [9], make_entry(), cache_type="assistant")
++
++        hit_main, _ = cache.fetch_nearest_cache("m", [1, 2, 3])
++        exact_other = cache._trie.search("m", [9]).exact
++
++        self.assertIsNotNone(hit_main)
++        self.assertIsNone(exact_other)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

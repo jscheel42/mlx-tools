@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Uninstall mlx-lm model launchd service
+# Uninstall mlx-vlm model launchd service
 #
 
 set -e

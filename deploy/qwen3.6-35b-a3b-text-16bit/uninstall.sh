@@ -5,6 +5,11 @@
 
 set -e
 
+AUTO_CONFIRM=false
+if [ "${1:-}" = "--yes" ] || [ "${MLX_AUTO_CONFIRM:-}" = "1" ]; then
+    AUTO_CONFIRM=true
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 
@@ -22,11 +27,13 @@ if [ ! -f "$PLIST_PATH" ]; then
     exit 0
 fi
 
-read -p "Stop and remove $SERVICE_NAME? (y/n) " -n 1 -r
-echo ""
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Uninstall cancelled"
-    exit 0
+if [ "$AUTO_CONFIRM" != "true" ]; then
+    read -p "Stop and remove $SERVICE_NAME? (y/n) " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Uninstall cancelled"
+        exit 0
+    fi
 fi
 
 launchctl unload "$PLIST_PATH" 2>/dev/null || true

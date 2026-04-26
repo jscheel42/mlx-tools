@@ -2,9 +2,6 @@
 #
 # Install mlx-lm model as a macOS launchd service
 #
-# Usage:
-#   ./install.sh [--start]
-#
 
 set -e
 
@@ -23,9 +20,6 @@ CONFIG_DISPLAY_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE'))
 CONFIG_PORT=$(python3 -c "import json; c=json.loads(open('$CONFIG_FILE').read()); print(c.get('server', {}).get('port', 8000))")
 CONFIG_MODEL_ID=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('model_id', 'mlx-local'))")
 PROMPT_CACHE_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_cache_size', 10))")
-DECODE_CONCURRENCY=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('decode_concurrency', 32))")
-PROMPT_CONCURRENCY=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_concurrency', 8))")
-PREFILL_STEP_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prefill_step_size', 2048))")
 PROMPT_CACHE_TTL_SECONDS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_cache_ttl_seconds', 0))")
 PROMPT_CACHE_PIN_LARGEST_SESSION=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print('true' if c.get('server', {}).get('prompt_cache_pin_largest_session', False) else 'false')")
 PROMPT_CACHE_PINNED_MAX_BYTES=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); s=c.get('server', {}); mb=s.get('prompt_cache_pinned_max_mb'); b=s.get('prompt_cache_pinned_max_bytes', 0); print(int(mb) * 1024 * 1024 if mb is not None else b)")
@@ -90,9 +84,6 @@ exec "$PYTHON_BIN" -m mlx_lm server \
     $([ "$PROMPT_CACHE_TTL_SECONDS" -gt 0 ] && echo "--prompt-cache-ttl-seconds $PROMPT_CACHE_TTL_SECONDS") \
     $([ "$PROMPT_CACHE_PIN_LARGEST_SESSION" = "true" ] && echo "--prompt-cache-pin-largest-session") \
     $([ "$PROMPT_CACHE_PINNED_MAX_BYTES" -gt 0 ] && echo "--prompt-cache-pinned-max-bytes $PROMPT_CACHE_PINNED_MAX_BYTES") \
-    --decode-concurrency $DECODE_CONCURRENCY \
-    --prompt-concurrency $PROMPT_CONCURRENCY \
-    --prefill-step-size $PREFILL_STEP_SIZE \
     $([ "$TRUST_REMOTE_CODE" = "true" ] && echo "--trust-remote-code") \
     --temp $TEMP \
     --top-p $TOP_P \
@@ -149,10 +140,3 @@ if [[ "$1" == "--start" ]]; then
 fi
 
 echo "Installed $CONFIG_DISPLAY_NAME"
-echo "  prompt_cache_size: $PROMPT_CACHE_SIZE"
-echo "  temperature: $TEMP"
-echo "  top_p: $TOP_P"
-echo "  top_k: $TOP_K"
-echo "  min_p: $MIN_P"
-echo "  presence_penalty: unsupported by current mlx_lm.server CLI"
-echo "  repetition_penalty: unsupported by current mlx_lm.server CLI"

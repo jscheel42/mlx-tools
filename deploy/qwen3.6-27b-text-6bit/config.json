@@ -1,7 +1,7 @@
-    {
-    "name": "qwen3.6-35b-a3b-text-8bit",
-    "display_name": "Qwen3.6-35B-A3B-TEXT-8bit",
-    "model_path": "./local-models/Qwen/Qwen3.6-35B-A3B-TEXT-8bit",
+{
+    "name": "qwen3.6-27b-text-6bit",
+    "display_name": "Qwen3.6-27B-TEXT-6bit",
+    "model_path": "./local-models/Qwen/Qwen3.6-27B-TEXT-6bit",
     "parameters": {
         "temp": 0.6,
         "top_p": 0.95,
@@ -9,16 +9,16 @@
         "min_p": 0.0,
         "presence_penalty": 0.0,
         "repetition_penalty": 1.0,
-        "max_tokens": 100000
+        "max_tokens": 250000
     },
     "server": {
         "host": "0.0.0.0",
         "port": 8000,
         "model_id": "mlx-local",
-        "prompt_cache_size": 8,
-        "prompt_cache_ttl_seconds": 600,
+        "prompt_cache_size": 30,
+        "prompt_cache_ttl_seconds": 1800,
         "prompt_cache_pin_largest_session": true,
-        "prompt_cache_pinned_max_mb": 32000,
+        "prompt_cache_pinned_max_mb": 8192,
         "wired_limit_mb": 100000,
         "trust_remote_code": true
     }

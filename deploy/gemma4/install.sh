@@ -21,6 +21,7 @@ fi
 
 CONFIG_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('name', 'unknown'))")
 CONFIG_MODEL_PATH=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('model_path', ''))")
+CONFIG_MODEL_PATH_ABS=$(python3 -c "from pathlib import Path; import json; c=json.load(open('$CONFIG_FILE')); print((Path('$SCRIPT_DIR/../..') / c.get('model_path', '')).resolve())")
 CONFIG_DISPLAY_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('display_name', c.get('name', 'unknown')))")
 
 CONFIG_PORT=$(python3 -c "import json; c=json.loads(open('$CONFIG_FILE').read()); print(c.get('server', {}).get('port', 8000))")
@@ -42,8 +43,10 @@ SERVICE_NAME="com.local.mlx-$CONFIG_NAME"
 PLIST_PATH="$HOME/Library/LaunchAgents/$SERVICE_NAME.plist"
 START_SERVER="$SCRIPT_DIR/start.sh"
 DEPLOY_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MODEL_ALIAS_PATH="$DEPLOY_DIR/$CONFIG_MODEL_ID"
 
 PYTHON_BIN="/Users/jscheel/.local/share/uv/python/cpython-3.12-macos-aarch64-none/bin/python3.12"
+VENV_PYTHON="$DEPLOY_DIR/.venv/bin/python"
 
 echo "=================================================="
 echo "  Installing MLX Model: $CONFIG_DISPLAY_NAME"
@@ -74,6 +77,34 @@ if [ ! -d "$SCRIPT_DIR/logs" ]; then
 fi
 
 if [ "$CONFIG_BACKEND" = "mlx_vlm" ]; then
+    if [ ! -x "$VENV_PYTHON" ]; then
+        echo "Error: virtualenv python not found: $VENV_PYTHON"
+        echo "Run setup first: ./setup-mlx-lm-repo.sh"
+        exit 1
+    fi
+
+    if ! "$VENV_PYTHON" - <<'PY'
+import importlib.util
+import sys
+
+required = ("mlx_vlm", "torch", "torchvision")
+missing = [m for m in required if importlib.util.find_spec(m) is None]
+sys.exit(0 if not missing else 1)
+PY
+    then
+        echo "Installing VLM runtime dependencies into .venv (mlx-vlm, torch, torchvision)..."
+        uv pip install --python "$VENV_PYTHON" -U mlx-vlm torch torchvision
+    fi
+
+    if [ -e "$MODEL_ALIAS_PATH" ] && [ ! -L "$MODEL_ALIAS_PATH" ]; then
+        echo "Error: model alias path exists and is not a symlink: $MODEL_ALIAS_PATH"
+        echo "Please remove or rename it, then retry."
+        exit 1
+    fi
+    ln -sfn "$CONFIG_MODEL_PATH_ABS" "$MODEL_ALIAS_PATH"
+fi
+
+if [ "$CONFIG_BACKEND" = "mlx_vlm" ]; then
     cat > "$START_SERVER" << STARTSCRIPT
 #!/bin/bash
 #
@@ -85,9 +116,10 @@ set -e
 
 PYTHON_BIN="$PYTHON_BIN"
 export PYTHONPATH="$DEPLOY_DIR/mlx-lm-repo:$DEPLOY_DIR/.venv/lib/python3.12/site-packages:\${PYTHONPATH:-}"
+export MLX_VLM_MODEL_ID="$CONFIG_MODEL_ID"
 
 exec "$PYTHON_BIN" -m mlx_vlm.server \\
-    --model "$CONFIG_MODEL_PATH" \\
+    --model "$CONFIG_MODEL_ID" \\
     --host "$HOST" \\
     --port $CONFIG_PORT \\
     $([ "$TRUST_REMOTE_CODE" = "true" ] && echo "--trust-remote-code")

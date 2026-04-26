@@ -23,6 +23,12 @@ CONFIG_DISPLAY_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE'))
 CONFIG_PORT=$(python3 -c "import json; c=json.loads(open('$CONFIG_FILE').read()); print(c.get('server', {}).get('port', 8000))")
 CONFIG_MODEL_ID=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('model_id', 'mlx-local'))")
 PROMPT_CACHE_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_cache_size', 10))")
+PROMPT_CACHE_TTL_SECONDS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('prompt_cache_ttl_seconds', 0))")
+PROMPT_CACHE_PIN_LARGEST_SESSION=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print('true' if c.get('server', {}).get('prompt_cache_pin_largest_session', False) else 'false')")
+PROMPT_CACHE_PINNED_MAX_BYTES=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); s=c.get('server', {}); mb=s.get('prompt_cache_pinned_max_mb'); b=s.get('prompt_cache_pinned_max_bytes', 0); print(int(mb) * 1024 * 1024 if mb is not None else b)")
+KV_BITS=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('bits', ''))")
+KV_GROUP_SIZE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('group_size', 64))")
+KV_QUANTIZED_START=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('kv_cache', {}).get('quantized_start', 0))")
 
 TEMP=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('parameters', {}).get('temp', 0.6))")
 TOP_P=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('parameters', {}).get('top_p', 0.95))")
@@ -81,6 +87,10 @@ exec "$PYTHON_BIN" -m mlx_lm server \
     --port $CONFIG_PORT \
     --log-level "$LOG_LEVEL" \
     --prompt-cache-size $PROMPT_CACHE_SIZE \
+    $([ "$PROMPT_CACHE_TTL_SECONDS" -gt 0 ] && echo "--prompt-cache-ttl-seconds $PROMPT_CACHE_TTL_SECONDS") \
+    $([ "$PROMPT_CACHE_PIN_LARGEST_SESSION" = "true" ] && echo "--prompt-cache-pin-largest-session") \
+    $([ "$PROMPT_CACHE_PINNED_MAX_BYTES" -gt 0 ] && echo "--prompt-cache-pinned-max-bytes $PROMPT_CACHE_PINNED_MAX_BYTES") \
+    $([ -n "$KV_BITS" ] && echo "--kv-bits $KV_BITS --kv-group-size $KV_GROUP_SIZE --quantized-kv-start $KV_QUANTIZED_START") \
     $([ "$TRUST_REMOTE_CODE" = "true" ] && echo "--trust-remote-code") \
     --temp $TEMP \
     --top-p $TOP_P \

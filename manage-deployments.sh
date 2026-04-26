@@ -157,7 +157,7 @@ cmd_uninstall() {
     deploy_path=$(get_deployment_path "$name")
 
     echo "Uninstalling deployment: $name"
-    "$deploy_path/uninstall.sh"
+    MLX_AUTO_CONFIRM=1 "$deploy_path/uninstall.sh" --yes
 }
 
 cmd_start() {
@@ -397,7 +397,7 @@ cmd_uninstall_all() {
 
             if [ -f "$HOME/Library/LaunchAgents/$service_name.plist" ]; then
                 echo "Uninstalling: $name"
-                "$dir/uninstall.sh"
+                MLX_AUTO_CONFIRM=1 "$dir/uninstall.sh" --yes
                 echo ""
             fi
         fi

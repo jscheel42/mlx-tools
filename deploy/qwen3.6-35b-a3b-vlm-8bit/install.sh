@@ -1,0 +1,147 @@
+#!/bin/bash
+#
+# Install mlx-vlm model as a macOS launchd service
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/config.json"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: config.json not found in $SCRIPT_DIR"
+    exit 1
+fi
+
+CONFIG_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('name', 'unknown'))")
+CONFIG_MODEL_PATH=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('model_path', ''))")
+CONFIG_MODEL_PATH_ABS=$(python3 -c "from pathlib import Path; import json; c=json.load(open('$CONFIG_FILE')); print((Path('$SCRIPT_DIR/../..') / c.get('model_path', '')).resolve())")
+CONFIG_DISPLAY_NAME=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('display_name', c.get('name', 'unknown')))")
+CONFIG_MODEL_ID=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('model_id', 'mlx-local'))")
+
+CONFIG_PORT=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('port', 8000))")
+HOST=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('server', {}).get('host', '0.0.0.0'))")
+TRUST_REMOTE_CODE=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print('true' if c.get('server', {}).get('trust_remote_code', True) else 'false')")
+
+SERVICE_NAME="com.local.mlx-$CONFIG_NAME"
+PLIST_PATH="$HOME/Library/LaunchAgents/$SERVICE_NAME.plist"
+START_SERVER="$SCRIPT_DIR/start.sh"
+DEPLOY_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MODEL_ALIAS_PATH="$DEPLOY_DIR/$CONFIG_MODEL_ID"
+
+PYTHON_BIN="/Users/jscheel/.local/share/uv/python/cpython-3.12-macos-aarch64-none/bin/python3.12"
+VENV_PYTHON="$DEPLOY_DIR/.venv/bin/python"
+
+echo "=================================================="
+echo "  Installing MLX Model: $CONFIG_DISPLAY_NAME"
+echo "=================================================="
+echo ""
+echo "Service Name: $SERVICE_NAME"
+echo "Port: $CONFIG_PORT"
+echo "Model: $CONFIG_MODEL_PATH"
+echo ""
+
+if [ -f "$PLIST_PATH" ]; then
+    echo "Service is already installed"
+    echo ""
+    read -p "Do you want to reinstall and reload the service? (y/n) " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Installation cancelled"
+        exit 0
+    fi
+
+    echo "Unloading existing service..."
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+fi
+
+mkdir -p "$SCRIPT_DIR/logs"
+
+if [ -e "$MODEL_ALIAS_PATH" ] && [ ! -L "$MODEL_ALIAS_PATH" ]; then
+    echo "Error: model alias path exists and is not a symlink: $MODEL_ALIAS_PATH"
+    echo "Please remove or rename it, then retry."
+    exit 1
+fi
+ln -sfn "$CONFIG_MODEL_PATH_ABS" "$MODEL_ALIAS_PATH"
+
+if [ ! -x "$VENV_PYTHON" ]; then
+    echo "Error: virtualenv python not found: $VENV_PYTHON"
+    echo "Run setup first: ./setup-mlx-lm-repo.sh"
+    exit 1
+fi
+
+if ! "$VENV_PYTHON" - <<'PY'
+import importlib.util
+import sys
+
+required = ("mlx_vlm", "torch", "torchvision")
+missing = [m for m in required if importlib.util.find_spec(m) is None]
+sys.exit(0 if not missing else 1)
+PY
+then
+    echo "Installing VLM runtime dependencies into .venv (mlx-vlm, torch, torchvision)..."
+    uv pip install --python "$VENV_PYTHON" -U mlx-vlm torch torchvision
+fi
+
+cat > "$START_SERVER" << STARTSCRIPT
+#!/bin/bash
+set -e
+
+PYTHON_BIN="$PYTHON_BIN"
+export PYTHONPATH="$DEPLOY_DIR/mlx-lm-repo:$DEPLOY_DIR/.venv/lib/python3.12/site-packages:\${PYTHONPATH:-}"
+export MLX_VLM_MODEL_ID="$CONFIG_MODEL_ID"
+
+exec "$PYTHON_BIN" -m mlx_vlm.server \
+    --model "$CONFIG_MODEL_ID" \
+    --host "$HOST" \
+    --port $CONFIG_PORT \
+    $([ "$TRUST_REMOTE_CODE" = "true" ] && echo "--trust-remote-code")
+STARTSCRIPT
+
+chmod +x "$START_SERVER"
+
+cat > "$PLIST_PATH" << PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$SERVICE_NAME</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$START_SERVER</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$DEPLOY_DIR</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>$SCRIPT_DIR/logs/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>$SCRIPT_DIR/logs/stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>
+PLISTEOF
+
+echo "Loading service..."
+launchctl load "$PLIST_PATH"
+
+if [[ "$1" == "--start" ]]; then
+    echo "Starting service..."
+    launchctl start "$SERVICE_NAME"
+    sleep 2
+fi
+
+echo "Installed $CONFIG_DISPLAY_NAME"
