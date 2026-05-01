@@ -2,16 +2,16 @@
 
 ## Architecture
 
-This repo is **meta-tooling** around a cloned+patched `mlx-lm` checkout. Two separate git repos live here:
+This repo is **meta-tooling** around an `mlx-lm` checkout. Two separate git repos:
 
 - **Main repo** (this directory) — shell scripts, deploy configs, docs. Git-ignores `mlx-lm-repo/`, `local-models/`, `.venv/`.
-- **`mlx-lm-repo/`** — separate git repo with `upstream` remote (original `origin` was renamed). Branch `main` tracks upstream; patches are committed on top.
+- **`mlx-lm-repo/`** — separate git repo. `origin` points to `ml-explore/mlx-lm` (upstream). `main` tracks it; `mlx-small.patch` is applied as unstaged changes.
 
 The server runs as an **editable install**: `.venv/` symlinks into `mlx-lm-repo/`, so edits to `mlx-lm-repo/mlx_lm/` take effect immediately.
 
 ## Quick Commands
 
-### One-time setup
+### Setup
 ```bash
 ./setup-mlx-lm-repo.sh
 source .venv/bin/activate
@@ -39,11 +39,9 @@ Deployments live in `deploy/<name>/` with `config.json` + auto-generated `instal
 ```bash
 ./update-mlx-lm.sh --apply-patch
 ```
-Fetches from `mlx-lm-repo` origin/main (not upstream) and applies `mlx-small.patch`. Alternatively:
+Fetches from `mlx-lm-repo` origin/main and applies `mlx-small.patch`. Alternatively:
 ```bash
-cd mlx-lm-repo
-git fetch upstream && git rebase upstream/main
-# resolve conflicts → git add → git rebase --continue
+cd mlx-lm-repo && git stash && git pull origin main && git stash pop
 cd .. && source .venv/bin/activate && cd mlx-lm-repo && uv pip install -e . && cd ..
 ```
 
@@ -77,7 +75,7 @@ python3 bench-local.py --base-url http://localhost:8000/v1 --model mlx-local
 
 ## Patch Management
 
-**Active patch**: `mlx-small.patch` — large patch covering:
+**Active patch**: `mlx-small.patch` — covers:
 - KV cache quantization (`--kv-bits`, `--kv-group-size`, `--quantized-kv-start`)
 - Prompt cache TTL eviction + pin-largest-session (`--prompt-cache-ttl-seconds`, `--prompt-cache-pin-largest-session`, `--prompt-cache-pinned-max-bytes`)
 - `--model-id` override for `/v1/models` response
@@ -90,10 +88,36 @@ python3 bench-local.py --base-url http://localhost:8000/v1 --model mlx-local
 
 When updating mlx-lm, always regenerate `mlx-small.patch` from the working `mlx-lm-repo`:
 ```bash
-cd mlx-lm-repo && git diff upstream/main > ../mlx-small.patch
+cd mlx-lm-repo && git diff origin/main > ../mlx-small.patch
 ```
 
-## Key Files & Directories
+## Deployment Config Format
+
+Each `deploy/<name>/config.json` supports these top-level keys:
+
+| Key | Maps to CLI arg |
+|-----|----------------|
+| `model_path` | `--model` |
+| `parameters.temp` | `--temp` |
+| `parameters.top_p` | `--top-p` |
+| `parameters.top_k` | `--top-k` |
+| `parameters.min_p` | `--min-p` |
+| `parameters.presence_penalty` | `--presence-penalty` |
+| `parameters.repetition_penalty` | `--repetition-penalty` |
+| `parameters.max_tokens` | `--max-tokens` |
+| `server.port` | `--port` |
+| `server.model_id` | `--model-id` |
+| `server.backend` | `--backend` (use `"mlx_vlm"` for vision models) |
+| `server.prompt_cache_size` | `--prompt-cache-size` |
+| `server.prompt_cache_ttl_seconds` | `--prompt-cache-ttl-seconds` |
+| `server.prompt_cache_pin_largest_session` | `--prompt-cache-pin-largest-session` |
+| `server.prompt_cache_pinned_max_mb` | `--prompt-cache-pinned-max-mb` |
+| `server.chat_template_args` | forwarded as JSON to `--chat-template-args` |
+| `server.wired_limit_mb` | `--wired-limit-mb` |
+| `server.log_level` | `--log-level` |
+| `server.trust_remote_code` | `--trust-remote-code` |
+
+## Key Files
 
 | Path | Purpose |
 |------|---------|
@@ -102,8 +126,10 @@ cd mlx-lm-repo && git diff upstream/main > ../mlx-small.patch
 | `mlx-lm-repo/mlx_lm/generate.py` | Generation engine (KV quantization patched) |
 | `mlx-lm-repo/mlx_lm/tool_parsers/` | Model-specific tool calling parsers |
 | `mlx-lm-repo/tests/` | 17 test modules for the library |
-| `deploy/<name>/config.json` | Per-deployment config (port, model, params, kv_cache) |
+| `deploy/<name>/config.json` | Per-deployment config |
 | `local-models/` | Converted model artifacts (git-ignored) |
+| `mlx-local` | Symlink → current active model for opencode |
+| `mlx-local-vlm` | Symlink → current active VLM model for opencode |
 | `notes/` | Deep-dive docs — see table below |
 
 ## Notes Directory Guide
@@ -113,23 +139,24 @@ cd mlx-lm-repo && git diff upstream/main > ../mlx-small.patch
 | `notes/MLX_LM_MANAGEMENT.md` | Updating mlx-lm while preserving patches |
 | `notes/MODEL_CONVERSION.md` | Conversion workflow, quantization levels |
 | `notes/KV_CACHE_QUANTIZATION.md` | KV cache bits, memory savings, tuning |
-| `notes/CACHE_CONFIGURATION.md` | `--prompt-cache-size` tuning |
+| `notes/CACHE_CONFIGURATION.md` | Prompt cache sizing |
 | `notes/PROMPT_CACHE_EVICTION_PLAN.md` | TTL eviction + pin-largest-session design |
 | `notes/memory_analysis.md` | Memory breakdown, cache sizing rationale |
+
+`notes/README.md`, `notes/QUICKSTART.md`, and `notes/SETUP_NOTES.md` are **stale** — reference old single-deployment workflow and scripts that no longer exist.
 
 ## Gotchas
 
 - **`mlx-lm-repo/` is git-ignored** but has its own `.git/`. Never `git add mlx-lm-repo/` from the main repo.
 - **Two venvs**: `.venv/` for the server; `.mlx-conversion-temp/` is ephemeral and cleaned up automatically.
-- **`setup-mlx-lm-repo.sh` renames `origin` → `upstream`** and creates `local-patches` branch. `update-mlx-lm.sh` fetches from `origin` (which is the fork/remote you set up).
-- **`--prompt-cache-size 1`** is the recommended default for single-user (saves 40–70 GB). Set to `0` to disable caching entirely.
+- **`mlx-lm-repo` remote is `origin`** (not `upstream`). The old `setup-mlx-lm-repo.sh` script still references `upstream` — ignore it; the repo is already set up correctly.
+- **Multiple deployments share port 8000** by default — only one can be active at a time. VLM deployments typically use 8001.
+- **`--prompt-cache-size`**: set to `0` to disable caching entirely. Per-deployment values vary (1–50).
 - **KV quantization disables batching**: when `kv_bits` is set, the server falls back to non-batched generation (`_is_batchable` returns `False`).
-- **Deployment `config.json` keys**: `kv_cache.bits`, `kv_cache.group_size`, `kv_cache.quantized_start` map to `--kv-bits`, `--kv-group-size`, `--quantized-kv-start` CLI args.
-- **Multimodal deployments** need `server.backend: "mlx_vlm"` in config (e.g. `qwen3.6-35b-a3b-vlm-8bit`).
+- **Multimodal deployments** need `server.backend: "mlx_vlm"` in config.
 - **Pre-commit hooks** must be installed inside `mlx-lm-repo/` (the hooks repo lives there).
-- **`start-server.sh` does not exist** — deployments use `manage-deployments.sh` and per-deploy `start.sh` scripts generated at install time.
-- **`install-service.sh` / `uninstall-service.sh` do not exist** — use `manage-deployments.sh install/uninstall` instead.
-- **`notes/QUICKSTART.md` and `notes/README.md` are stale** — they reference old single-deployment workflow and scripts that no longer exist.
+- **`mlx-local` / `mlx-local-vlm` symlinks** point to models for opencode's own model config (see `README.md` for opencode integration). They are separate from deployments — deployments use `deploy/<name>/config.json` directly.
+- **`mlx-local` currently points to a VLM model** — naming mismatch. Do not assume `mlx-local` is text-only.
 
 ## Code Style (mlx-lm-repo)
 

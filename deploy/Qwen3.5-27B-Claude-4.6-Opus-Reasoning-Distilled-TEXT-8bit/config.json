@@ -16,6 +16,9 @@
     "port": 8000,
     "model_id": "mlx-local",
     "prompt_cache_size": 20,
+    "chat_template_args": {
+      "enable_thinking": false
+    },
     "wired_limit_mb": 100000,
     "trust_remote_code": true
   }

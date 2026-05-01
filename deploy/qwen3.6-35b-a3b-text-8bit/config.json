@@ -15,10 +15,13 @@
         "host": "0.0.0.0",
         "port": 8000,
         "model_id": "mlx-local",
-        "prompt_cache_size": 8,
+        "prompt_cache_size": 42,
         "prompt_cache_ttl_seconds": 600,
         "prompt_cache_pin_largest_session": true,
         "prompt_cache_pinned_max_mb": 32000,
+        "chat_template_args": {
+            "enable_thinking": false
+        },
         "wired_limit_mb": 100000,
         "trust_remote_code": true
     }

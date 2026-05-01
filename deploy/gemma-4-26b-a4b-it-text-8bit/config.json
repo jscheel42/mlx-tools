@@ -1,7 +1,7 @@
 {
-    "name": "qwen3.6-27b-text-6bit",
-    "display_name": "Qwen3.6-27B-TEXT-6bit",
-    "model_path": "./local-models/Qwen/Qwen3.6-27B-TEXT-6bit",
+    "name": "gemma-4-26b-a4b-it-text-8bit",
+    "display_name": "Gemma-4-26B-A4B-it-TEXT-8bit",
+    "model_path": "./local-models/google/gemma-4-26B-A4B-it-TEXT-8bit",
     "parameters": {
         "temp": 0.6,
         "top_p": 0.95,
@@ -9,7 +9,7 @@
         "min_p": 0.0,
         "presence_penalty": 0.0,
         "repetition_penalty": 1.0,
-        "max_tokens": 250000
+        "max_tokens": 200000
     },
     "server": {
         "host": "0.0.0.0",

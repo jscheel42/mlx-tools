@@ -16,6 +16,9 @@
     "port": 8000,
     "model_id": "mlx-local",
     "log_level": "DEBUG",
+    "chat_template_args": {
+      "enable_thinking": false
+    },
     "wired_limit_mb": 0,
     "trust_remote_code": true
   },
