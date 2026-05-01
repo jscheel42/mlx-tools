@@ -93,29 +93,41 @@ cd mlx-lm-repo && git diff origin/main > ../mlx-small.patch
 
 ## Deployment Config Format
 
-Each `deploy/<name>/config.json` supports these top-level keys:
+Each `deploy/<name>/config.json` uses this structure. Only the keys listed below are actually consumed by `install.sh`. Others sit in the JSON but have no effect.
 
-| Key | Maps to CLI arg |
-|-----|----------------|
-| `model_path` | `--model` |
-| `parameters.temp` | `--temp` |
-| `parameters.top_p` | `--top-p` |
-| `parameters.top_k` | `--top-k` |
-| `parameters.min_p` | `--min-p` |
-| `parameters.presence_penalty` | `--presence-penalty` |
-| `parameters.repetition_penalty` | `--repetition-penalty` |
-| `parameters.max_tokens` | `--max-tokens` |
-| `server.port` | `--port` |
-| `server.model_id` | `--model-id` |
-| `server.backend` | `--backend` (use `"mlx_vlm"` for vision models) |
-| `server.prompt_cache_size` | `--prompt-cache-size` |
-| `server.prompt_cache_ttl_seconds` | `--prompt-cache-ttl-seconds` |
-| `server.prompt_cache_pin_largest_session` | `--prompt-cache-pin-largest-session` |
-| `server.prompt_cache_pinned_max_mb` | `--prompt-cache-pinned-max-mb` |
-| `server.chat_template_args` | forwarded as JSON to `--chat-template-args` |
-| `server.wired_limit_mb` | `--wired-limit-mb` |
-| `server.log_level` | `--log-level` |
-| `server.trust_remote_code` | `--trust-remote-code` |
+### Text model deployments (text/install.sh)
+
+| Key | CLI arg | Default |
+|-----|---------|---------|
+| `model_path` | `--model` | — |
+| `parameters.temp` | `--temp` | 0.6 |
+| `parameters.top_p` | `--top-p` | 0.95 |
+| `parameters.top_k` | `--top-k` | 20 |
+| `parameters.min_p` | `--min-p` | 0.0 |
+| `parameters.max_tokens` | `--max-tokens` | 100000 |
+| `server.host` | `--host` | 0.0.0.0 |
+| `server.port` | `--port` | 8000 |
+| `server.model_id` | `--model-id` | mlx-local |
+| `server.prompt_cache_size` | `--prompt-cache-size` | 10 |
+| `server.log_level` | `--log-level` | INFO |
+| `server.trust_remote_code` | `--trust-remote-code` | true |
+| `server.chat_template_args` | `--chat-template-args` (JSON) | `{}` |
+
+**Not wired into install.sh** (listed in old docs but consumed nowhere): `presence_penalty`, `repetition_penalty`, `server.backend`, `server.wired_limit_mb`, `server.prompt_cache_ttl_seconds`, `server.prompt_cache_pin_largest_session`, `server.prompt_cache_pinned_max_mb`.
+
+### VLM deployments (VLM/install.sh)
+
+VLM deploy scripts read a subset of keys and use `mlx_vlm.server` instead of `mlx_lm.server`:
+
+| Key | CLI arg | Default |
+|-----|---------|---------|
+| `model_path` | resolved to absolute path → symlinked as `server.model_id` alias | — |
+| `server.host` | `--host` | 0.0.0.0 |
+| `server.port` | `--port` | 8001 |
+| `server.model_id` | `MLX_VLM_MODEL_ID` env var + symlink target | mlx-local-vlm |
+| `server.trust_remote_code` | `--trust-remote-code` | true |
+
+VLM install.sh auto-installs `mlx-vlm`, `torch`, `torchvision` into `.venv` if missing.
 
 ## Key Files
 
@@ -153,10 +165,10 @@ Each `deploy/<name>/config.json` supports these top-level keys:
 - **Multiple deployments share port 8000** by default — only one can be active at a time. VLM deployments typically use 8001.
 - **`--prompt-cache-size`**: set to `0` to disable caching entirely. Per-deployment values vary (1–50).
 - **KV quantization disables batching**: when `kv_bits` is set, the server falls back to non-batched generation (`_is_batchable` returns `False`).
-- **Multimodal deployments** need `server.backend: "mlx_vlm"` in config.
 - **Pre-commit hooks** must be installed inside `mlx-lm-repo/` (the hooks repo lives there).
 - **`mlx-local` / `mlx-local-vlm` symlinks** point to models for opencode's own model config (see `README.md` for opencode integration). They are separate from deployments — deployments use `deploy/<name>/config.json` directly.
 - **`mlx-local` currently points to a VLM model** — naming mismatch. Do not assume `mlx-local` is text-only.
+- **`presence_penalty` and `repetition_penalty` are not supported** by the current `mlx_lm.server` CLI — install.sh prints a warning for these.
 
 ## Code Style (mlx-lm-repo)
 
